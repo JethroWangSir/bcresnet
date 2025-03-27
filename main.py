@@ -121,7 +121,7 @@ class Trainer:
                 self._save_top_3_checkpoints(epoch, valid_acc)
 
         test_acc, test_auroc, test_f1, test_fa = self.Test(self.test_dataset, self.test_loader, augment=False)  # official testset
-        print(f"Test - Acc: {test_acc:.3f}, AUROC: {test_auroc:.3f}, F1: {test_f1:.3f}, FA: {test_fa:.3f}")
+        print(f"Last ckpt test - Acc: {test_acc:.3f}, AUROC: {test_auroc:.3f}, F1: {test_f1:.3f}, FA: {test_fa:.3f}")
 
         # After training, test the best checkpoint
         self._test_best_checkpoint()
