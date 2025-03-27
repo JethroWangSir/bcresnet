@@ -137,12 +137,12 @@ class BCResNets(nn.Module):
         self.num_classes = num_classes
         self.n = [2, 2, 4, 4]  # identical modules repeated n times
         self.c = [
-            base_c * 2,
-            base_c,
-            int(base_c * 1.5),
-            base_c * 2,
-            int(base_c * 2.5),
-            base_c * 4,
+            base_c * 2,  # 1 * 8 * 2 = 16
+            base_c,  # 1 * 8 = 8
+            int(base_c * 1.5),  # int(1 * 8 * 1.5) = 12
+            base_c * 2,  # 16
+            int(base_c * 2.5),  # int(1 * 8 * 2.5) = 20
+            base_c * 4,  # 1 * 8 * 4 = 32
         ]  # num channels
         self.s = [1, 2]  # stage using stride
         self._build_network()

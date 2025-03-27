@@ -12,6 +12,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
+from sklearn.metrics import roc_auc_score, f1_score, confusion_matrix
+import wandb
 
 from bcresnet import BCResNets
 from utils import DownloadDataset, Padding, Preprocess, SpeechCommand, SplitDataset
@@ -27,6 +29,9 @@ class Trainer:
         parser = ArgumentParser()
         parser.add_argument(
             "--ver", default=1, help="google speech command set version 1 or 2", type=int
+        )
+        parser.add_argument(
+            "--num_classes", default=12, help="number of classes", type=int
         )
         parser.add_argument(
             "--tau", default=1, help="model size", type=float, choices=[1, 1.5, 2, 3, 6, 8]
@@ -81,24 +86,39 @@ class Trainer:
                 inputs = self.preprocess_train(inputs, labels, augment=True)
                 outputs = self.model(inputs)
                 loss = F.cross_entropy(outputs, labels)
+                # wandb.log({"Softmax Loss": loss.item()})
                 loss.backward()
                 optimizer.step()
                 self.model.zero_grad()
 
             # valid
             print("cur lr check ... %.4f" % lr)
+            # wandb.log({"LR": lr.item()})
             with torch.no_grad():
                 self.model.eval()
-                valid_acc = self.Test(self.valid_dataset, self.valid_loader, augment=True)
-                print("valid acc: %.3f" % (valid_acc))
+                valid_acc, valid_auroc, valid_f1, valid_fa = self.Test(self.valid_dataset, self.valid_loader, augment=True)
+                print("valid - acc: %.3f, auroc: %.3f, f1: %.3f, fa: %.3f" % (valid_acc, valid_auroc, valid_f1, valid_fa))
+                # wandb.log({
+                #     "Valid Acc": valid_acc,
+                #     "Valid AUROC": valid_auroc,
+                #     "Valid F1": valid_f1,
+                #     "Valid FA": valid_fa
+                # })
 
-        test_acc = self.Test(self.test_dataset, self.test_loader, augment=False)  # official testset
-        print("test acc: %.3f" % (test_acc))
+        test_acc, test_auroc, test_f1, test_fa = self.Test(self.test_dataset, self.test_loader, augment=False)  # official testset
+        print("test - acc: %.3f, auroc: %.3f, f1: %.3f, fa: %.3f" % (test_acc, test_auroc, test_f1, test_fa))
+        # wandb.log({
+        #     "Epoch": epoch,
+        #     "Test Acc": test_acc,
+        #     "Test AUROC": test_auroc,
+        #     "Test F1": test_f1,
+        #     "Test FA": test_fa
+        # })
         print("End.")
 
     def Test(self, dataset, loader, augment):
         """
-        Tests the model on a given dataset.
+        Tests the model on a given dataset and calculates accuracy, AUROC, F1-score, and false alarm rate.
 
         Parameters:
             dataset (Dataset): The dataset to test the model on.
@@ -107,18 +127,52 @@ class Trainer:
 
         Returns:
             float: The accuracy of the model on the given dataset.
+            float: The AUROC score for the multi-class classification task.
+            float: The F1-score for the multi-class classification task.
+            float: The false alarm rate (FA).
         """
         true_count = 0.0
         num_testdata = float(len(dataset))
+        all_labels = []
+        all_outputs = []  # logits
+        all_predictions = []
+        confusion_mat = np.zeros((self.num_classes, self.num_classes))
+
         for inputs, labels in loader:
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
             inputs = self.preprocess_test(inputs, labels=labels, is_train=False, augment=augment)
             outputs = self.model(inputs)
+
+            # Collect all predictions and labels
             prediction = torch.argmax(outputs, dim=-1)
+            all_labels.extend(labels.cpu().numpy())
+            all_outputs.extend(outputs.cpu().detach().numpy())  # logits
+            all_predictions.extend(prediction.cpu().numpy())
+
+            # Update confusion matrix
+            batch_confusion = confusion_matrix(labels.cpu().numpy(), prediction.cpu().numpy(), labels=np.arange(self.num_classes))
+            confusion_mat += batch_confusion            
+
+            # Accuracy calculation
             true_count += torch.sum(prediction == labels).detach().cpu().numpy()
         acc = true_count / num_testdata * 100.0  # percentage
-        return acc
+
+        # AUROC calculation
+        all_outputs_prob = torch.softmax(torch.tensor(all_outputs), dim=1).cpu().detach().numpy()
+        auroc = roc_auc_score(np.array(all_labels), all_outputs_prob, average='macro', multi_class='ovr')
+        
+        # F1-score calculation
+        f1 = f1_score(np.array(all_labels), np.array(all_predictions), average='macro')
+        
+        # False alarm rate calculation
+        fa = {}
+        for i in range(self.num_classes):
+            false_alarms = np.sum(confusion_mat[:, i]) - confusion_mat[i, i]
+            total_predictions = np.sum(confusion_mat[:, i]) + confusion_mat[i, i]
+            fa[i] = false_alarms / total_predictions * 100 if total_predictions != 0 else 0
+
+        return acc, auroc, f1, fa
 
     def _load_data(self):
         """
@@ -127,9 +181,9 @@ class Trainer:
         Downloads and splits the data if necessary.
         """
         print("Check google speech commands dataset v1 or v2 ...")
-        if not os.path.isdir("./data"):
-            os.mkdir("./data")
-        base_dir = "./data/speech_commands_v0.01"
+        if not os.path.isdir("/share/nas169/jethrowang/GSC"):
+            os.mkdir("/share/nas169/jethrowang/GSC")
+        base_dir = "/share/nas169/jethrowang/GSC/speech_commands_v0.01"
         url = "https://storage.googleapis.com/download.tensorflow.org/data/speech_commands_v0.01.tar.gz"
         url_test = "https://storage.googleapis.com/download.tensorflow.org/data/speech_commands_test_set_v0.01.tar.gz"
         if self.ver == 2:
@@ -187,7 +241,26 @@ class Trainer:
         print("model: BC-ResNet-%.1f on data v0.0%d" % (self.tau, self.ver))
         self.model = BCResNets(int(self.tau * 8)).to(self.device)
 
+    def save_checkpoint(self, filepath='model.ckpt'):
+        """
+        Save the current model checkpoint to a file.
+
+        Parameters:
+            filepath (str): Path to save the checkpoint file.
+        """
+        checkpoint = {
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            # Add any other information you want to save, e.g., epoch, loss, etc.
+        }
+        torch.save(checkpoint, filepath)
+        print(f"Model checkpoint saved to {filepath}")
+
 
 if __name__ == "__main__":
+    # wandb.init(project="BC-ResNet", name='BC-ResNet')
+
     _trainer = Trainer()
     _trainer()
+
+    # wandb.finish()
