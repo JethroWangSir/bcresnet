@@ -122,7 +122,7 @@ class Trainer:
         test_acc, test_auroc, test_f1, test_fa = self.Test(self.test_dataset, self.test_loader, augment=False)  # official testset
         print(f"Test - Acc: {test_acc:.3f}, AUROC: {test_auroc:.3f}, F1: {test_f1:.3f}, FA: {test_fa:.3f}")
         wandb.log({
-            "Epoch": epoch,
+            "Epoch": epoch+1,
             "Test Acc": test_acc,
             "Test AUROC": test_auroc,
             "Test F1": test_f1,
@@ -278,14 +278,14 @@ class Trainer:
         """
         # Prepare checkpoint dictionary
         checkpoint = {
-            'epoch': epoch+1,
+            'epoch': epoch + 1,
             'model_state_dict': self.model.state_dict(),
             'valid_acc': valid_acc
         }
 
         # If less than 3 best accuracies, always save
         if len(self.top_3_valid_accs) < 3:
-            checkpoint_path = os.path.join(self.checkpoint_dir, f'model_epoch_{epoch}_acc_{valid_acc:.2f}.ckpt')
+            checkpoint_path = os.path.join(self.checkpoint_dir, f'model_epoch_{epoch+1}_acc_{valid_acc:.2f}.ckpt')
             torch.save(checkpoint, checkpoint_path)
             self.top_3_valid_accs.append((valid_acc, checkpoint_path))
             self.top_3_valid_accs.sort(reverse=True)  # Sort in descending order
