@@ -110,10 +110,11 @@ class Trainer:
                 valid_acc, valid_auroc, valid_f1, valid_fa = self.Test(self.valid_dataset, self.valid_loader, augment=True)
                 print(f"Valid - Acc: {valid_acc:.3f}, AUROC: {valid_auroc:.3f}, F1: {valid_f1:.3f}, FA: {valid_fa:.3f}")
                 wandb.log({
-                    "Valid Acc": valid_acc,
-                    "Valid AUROC": valid_auroc,
-                    "Valid F1": valid_f1,
-                    "Valid FA": valid_fa
+                    "Epoch": epoch + 1,
+                    "Valid_Acc": valid_acc,
+                    "Valid_AUROC": valid_auroc,
+                    "Valid_F1": valid_f1,
+                    "Valid_FA": valid_fa
                 })
 
                 # Save checkpoint for top 3 validation accuracies
@@ -121,13 +122,6 @@ class Trainer:
 
         test_acc, test_auroc, test_f1, test_fa = self.Test(self.test_dataset, self.test_loader, augment=False)  # official testset
         print(f"Test - Acc: {test_acc:.3f}, AUROC: {test_auroc:.3f}, F1: {test_f1:.3f}, FA: {test_fa:.3f}")
-        wandb.log({
-            "Epoch": epoch+1,
-            "Test Acc": test_acc,
-            "Test AUROC": test_auroc,
-            "Test F1": test_f1,
-            "Test FA": test_fa
-        })
 
         # After training, test the best checkpoint
         self._test_best_checkpoint()
