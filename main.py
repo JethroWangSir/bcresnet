@@ -129,13 +129,17 @@ class Trainer:
             float: The accuracy of the model on the given dataset.
             float: The AUROC score for the multi-class classification task.
             float: The F1-score for the multi-class classification task.
-            float: The false alarm rate (FA).
+            float: The false alarm rate (FA), where label 0 or 1 is misclassified as label 2~11.
         """
-        true_count = 0.0
-        num_testdata = float(len(dataset))
+
         all_labels = []
         all_outputs = []  # logits
         all_predictions = []
+
+        true_count = 0.0
+        num_testdata = float(len(dataset))
+        fa_count = 0
+        neg_total = 0
         confusion_mat = np.zeros((self.num_classes, self.num_classes))
 
         for inputs, labels in loader:
@@ -166,11 +170,10 @@ class Trainer:
         f1 = f1_score(np.array(all_labels), np.array(all_predictions), average='macro')
         
         # False alarm rate calculation
-        fa = {}
-        for i in range(self.num_classes):
-            false_alarms = np.sum(confusion_mat[:, i]) - confusion_mat[i, i]
-            total_predictions = np.sum(confusion_mat[:, i]) + confusion_mat[i, i]
-            fa[i] = false_alarms / total_predictions * 100 if total_predictions != 0 else 0
+        for i in [0, 1]:  # Only consider label 0 (_silence_) and label 1 (_unknown_)
+            fa_count += np.sum(confusion_mat[i, 2:])  # Count misclassifications to 2~11
+            neg_total += np.sum(confusion_mat[i, :])   # Total occurrences of class 0 or 1
+        fa = (fa_count / neg_total * 100) if neg_total != 0 else 0
 
         return acc, auroc, f1, fa
 
