@@ -163,8 +163,11 @@ class Trainer:
         acc = true_count / num_testdata * 100.0  # percentage
 
         # AUROC calculation
-        all_outputs_prob = torch.softmax(torch.tensor(all_outputs), dim=1).cpu().detach().numpy()
-        auroc = roc_auc_score(np.array(all_labels), all_outputs_prob, average='macro', multi_class='ovr')
+        all_outputs_prob = torch.softmax(torch.from_numpy(np.array(all_outputs)), dim=1).cpu().numpy()
+        if len(set(all_labels)) < self.num_classes:
+            auroc = float('nan')  # 或 return None
+        else:
+            auroc = roc_auc_score(np.array(all_labels), all_outputs_prob, average='macro', multi_class='ovr')
         
         # F1-score calculation
         f1 = f1_score(np.array(all_labels), np.array(all_predictions), average='macro')
@@ -173,7 +176,10 @@ class Trainer:
         for i in [0, 1]:  # Only consider label 0 (_silence_) and label 1 (_unknown_)
             fa_count += np.sum(confusion_mat[i, 2:])  # Count misclassifications to 2~11
             neg_total += np.sum(confusion_mat[i, :])   # Total occurrences of class 0 or 1
-        fa = (fa_count / neg_total * 100) if neg_total != 0 else 0
+        if neg_total == 0:
+            fa = None
+        else:
+            fa = fa_count / neg_total * 100.0
 
         return acc, auroc, f1, fa
 
