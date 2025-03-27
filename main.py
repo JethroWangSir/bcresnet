@@ -179,10 +179,10 @@ class Trainer:
         if len(set(all_labels)) < self.num_classes:
             auroc = float('nan')
         else:
-            auroc = roc_auc_score(np.array(all_labels), all_outputs_prob, average='macro', multi_class='ovr')
+            auroc = roc_auc_score(np.array(all_labels), all_outputs_prob, average='macro', multi_class='ovr') * 100.0
         
         # F1-score calculation
-        f1 = f1_score(np.array(all_labels), np.array(all_predictions), average='macro')
+        f1 = f1_score(np.array(all_labels), np.array(all_predictions), average='macro') * 100.0
         
         # False alarm rate calculation
         for i in [0, 1]:  # Only consider label 0 (_silence_) and label 1 (_unknown_)
