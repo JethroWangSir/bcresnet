@@ -41,8 +41,16 @@ class Trainer:
         args = parser.parse_args()
         self.__dict__.update(vars(args))
         self.device = torch.device("cuda:%d" % self.gpu if torch.cuda.is_available() else "cpu")
+        wandb.init(entity="jethrowang0531", project="BC-ResNet", name=f'tau_{self.tau}_ver_{self.ver}')
         self._load_data()
         self._load_model()
+
+        # Add a list to track top 3 validation accuracies
+        self.top_3_valid_accs = []
+        
+        # Create a directory to save checkpoints if it doesn't exist
+        self.checkpoint_dir = f"checkpoints_tau_{self.tau}_ver_{self.ver}"
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
 
     def __call__(self):
         """
@@ -61,6 +69,9 @@ class Trainer:
         n_step_warmup = len(self.train_loader) * warmup_epoch
         total_iter = len(self.train_loader) * total_epoch
         iterations = 0
+
+        # Best model tracking
+        best_valid_acc = 0
 
         # train
         for epoch in range(total_epoch):
@@ -86,34 +97,41 @@ class Trainer:
                 inputs = self.preprocess_train(inputs, labels, augment=True)
                 outputs = self.model(inputs)
                 loss = F.cross_entropy(outputs, labels)
-                # wandb.log({"Softmax Loss": loss.item()})
+                wandb.log({"Softmax Loss": loss.item()})
                 loss.backward()
                 optimizer.step()
                 self.model.zero_grad()
 
             # valid
             print("cur lr check ... %.4f" % lr)
-            # wandb.log({"LR": lr.item()})
+            wandb.log({"LR": lr})
             with torch.no_grad():
                 self.model.eval()
                 valid_acc, valid_auroc, valid_f1, valid_fa = self.Test(self.valid_dataset, self.valid_loader, augment=True)
-                print(f"valid - acc: {valid_acc:.3f}, auroc: {valid_auroc:.3f}, f1: {valid_f1:.3f}, fa: {valid_fa:.3f}")
-                # wandb.log({
-                #     "Valid Acc": valid_acc,
-                #     "Valid AUROC": valid_auroc,
-                #     "Valid F1": valid_f1,
-                #     "Valid FA": valid_fa
-                # })
+                print(f"Valid - acc: {valid_acc:.3f}, auroc: {valid_auroc:.3f}, f1: {valid_f1:.3f}, fa: {valid_fa:.3f}")
+                wandb.log({
+                    "Valid Acc": valid_acc,
+                    "Valid AUROC": valid_auroc,
+                    "Valid F1": valid_f1,
+                    "Valid FA": valid_fa
+                })
+
+                # Save checkpoint for top 3 validation accuracies
+                self._save_top_3_checkpoints(epoch, valid_acc)
 
         test_acc, test_auroc, test_f1, test_fa = self.Test(self.test_dataset, self.test_loader, augment=False)  # official testset
-        print(f"test - acc: {test_acc:.3f}, auroc: {test_auroc:.3f}, f1: {test_f1:.3f}, fa: {test_fa:.3f}")
-        # wandb.log({
-        #     "Epoch": epoch,
-        #     "Test Acc": test_acc,
-        #     "Test AUROC": test_auroc,
-        #     "Test F1": test_f1,
-        #     "Test FA": test_fa
-        # })
+        print(f"Test - acc: {test_acc:.3f}, auroc: {test_auroc:.3f}, f1: {test_f1:.3f}, fa: {test_fa:.3f}")
+        wandb.log({
+            "Epoch": epoch,
+            "Test Acc": test_acc,
+            "Test AUROC": test_auroc,
+            "Test F1": test_f1,
+            "Test FA": test_fa
+        })
+
+        # After training, test the best checkpoint
+        self._test_best_checkpoint()
+
         print("End.")
 
     def Test(self, dataset, loader, augment):
@@ -165,7 +183,7 @@ class Trainer:
         # AUROC calculation
         all_outputs_prob = torch.softmax(torch.from_numpy(np.array(all_outputs)), dim=1).cpu().numpy()
         if len(set(all_labels)) < self.num_classes:
-            auroc = float('nan')  # 或 return None
+            auroc = float('nan')
         else:
             auroc = roc_auc_score(np.array(all_labels), all_outputs_prob, average='macro', multi_class='ovr')
         
@@ -250,26 +268,87 @@ class Trainer:
         print("model: BC-ResNet-%.1f on data v0.0%d" % (self.tau, self.ver))
         self.model = BCResNets(int(self.tau * 8)).to(self.device)
 
-    def save_checkpoint(self, filepath='model.ckpt'):
+    def _save_top_3_checkpoints(self, epoch, valid_acc):
         """
-        Save the current model checkpoint to a file.
-
+        Save checkpoints for top 3 validation accuracies.
+        
         Parameters:
-            filepath (str): Path to save the checkpoint file.
+            epoch (int): Current training epoch
+            valid_acc (float): Validation accuracy for the current epoch
         """
+        # Prepare checkpoint dictionary
         checkpoint = {
+            'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            # Add any other information you want to save, e.g., epoch, loss, etc.
+            'valid_acc': valid_acc
         }
-        torch.save(checkpoint, filepath)
-        print(f"Model checkpoint saved to {filepath}")
+
+        # If less than 3 best accuracies, always save
+        if len(self.top_3_valid_accs) < 3:
+            checkpoint_path = os.path.join(self.checkpoint_dir, f'checkpoint_epoch_{epoch}_acc_{valid_acc:.2f}.pt')
+            torch.save(checkpoint, checkpoint_path)
+            self.top_3_valid_accs.append((valid_acc, checkpoint_path))
+            self.top_3_valid_accs.sort(reverse=True)  # Sort in descending order
+        else:
+            # Check if current accuracy is better than the worst in top 3
+            if valid_acc > self.top_3_valid_accs[-1][0]:
+                # Remove the worst checkpoint
+                _, worst_path = self.top_3_valid_accs.pop()
+                os.remove(worst_path)
+
+                # Save new checkpoint
+                checkpoint_path = os.path.join(self.checkpoint_dir, f'checkpoint_epoch_{epoch}_acc_{valid_acc:.2f}.pt')
+                torch.save(checkpoint, checkpoint_path)
+                self.top_3_valid_accs.append((valid_acc, checkpoint_path))
+                self.top_3_valid_accs.sort(reverse=True)  # Sort in descending order
+
+        # Log the current top 3 checkpoint paths
+        print("Current Top 3 Validation Accuracy Checkpoints:")
+        for acc, path in self.top_3_valid_accs:
+            print(f"Accuracy: {acc:.3f}, Path: {path}")
+
+    def _test_best_checkpoint(self):
+        """
+        Load and test the best checkpoint from the top 3 validation accuracies.
+        """
+        if not self.top_3_valid_accs:
+            print("No checkpoints were saved. Skipping best checkpoint test.")
+            return
+
+        # Sort checkpoints by validation accuracy in descending order
+        sorted_checkpoints = sorted(self.top_3_valid_accs, reverse=True)
+        
+        # Select the best checkpoint
+        best_valid_acc, best_checkpoint_path = sorted_checkpoints[0]
+        
+        print(f"\nTesting best checkpoint with validation accuracy: {best_valid_acc:.3f}")
+        print(f"Checkpoint path: {best_checkpoint_path}")
+
+        # Load the best checkpoint
+        checkpoint = torch.load(best_checkpoint_path)
+        
+        # Create a new model instance and load the state dict
+        best_model = BCResNets(int(self.tau * 8)).to(self.device)
+        best_model.load_state_dict(checkpoint['model_state_dict'])
+        
+        # Set the model to evaluation mode
+        best_model.eval()
+
+        # Replace the current model with the best model for testing
+        original_model = self.model
+        self.model = best_model
+
+        # Run test on the loaded model
+        with torch.no_grad():
+            best_test_acc, best_test_auroc, best_test_f1, best_test_fa = self.Test(self.test_dataset, self.test_loader, augment=False)
+            print(f"Best ckpt test - acc: {best_test_acc:.3f}, auroc: {best_test_auroc:.3f}, f1: {best_test_f1:.3f}, fa: {best_test_fa:.3f}")
+
+        # Restore the original model
+        self.model = original_model
 
 
 if __name__ == "__main__":
-    # wandb.init(project="BC-ResNet", name='BC-ResNet')
-
     _trainer = Trainer()
     _trainer()
 
-    # wandb.finish()
+    wandb.finish()
