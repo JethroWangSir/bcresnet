@@ -278,7 +278,7 @@ class Trainer:
         """
         # Prepare checkpoint dictionary
         checkpoint = {
-            'epoch': epoch,
+            'epoch': epoch+1,
             'model_state_dict': self.model.state_dict(),
             'valid_acc': valid_acc
         }
@@ -297,7 +297,7 @@ class Trainer:
                 os.remove(worst_path)
 
                 # Save new checkpoint
-                checkpoint_path = os.path.join(self.checkpoint_dir, f'model_epoch_{epoch}_acc_{valid_acc:.2f}.ckpt')
+                checkpoint_path = os.path.join(self.checkpoint_dir, f'model_epoch_{epoch+1}_acc_{valid_acc:.2f}.ckpt')
                 torch.save(checkpoint, checkpoint_path)
                 self.top_3_valid_accs.append((valid_acc, checkpoint_path))
                 self.top_3_valid_accs.sort(reverse=True)  # Sort in descending order
