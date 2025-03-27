@@ -49,7 +49,7 @@ class Trainer:
         self.top_3_valid_accs = []
         
         # Create a directory to save checkpoints if it doesn't exist
-        self.checkpoint_dir = f"checkpoints_tau_{self.tau}_ver_{self.ver}"
+        self.checkpoint_dir = f"./checkpoints/tau_{self.tau}_ver_{self.ver}"
         os.makedirs(self.checkpoint_dir, exist_ok=True)
 
     def __call__(self):
@@ -108,7 +108,7 @@ class Trainer:
             with torch.no_grad():
                 self.model.eval()
                 valid_acc, valid_auroc, valid_f1, valid_fa = self.Test(self.valid_dataset, self.valid_loader, augment=True)
-                print(f"Valid - acc: {valid_acc:.3f}, auroc: {valid_auroc:.3f}, f1: {valid_f1:.3f}, fa: {valid_fa:.3f}")
+                print(f"Valid - Acc: {valid_acc:.3f}, AUROC: {valid_auroc:.3f}, F1: {valid_f1:.3f}, FA: {valid_fa:.3f}")
                 wandb.log({
                     "Valid Acc": valid_acc,
                     "Valid AUROC": valid_auroc,
@@ -120,7 +120,7 @@ class Trainer:
                 self._save_top_3_checkpoints(epoch, valid_acc)
 
         test_acc, test_auroc, test_f1, test_fa = self.Test(self.test_dataset, self.test_loader, augment=False)  # official testset
-        print(f"Test - acc: {test_acc:.3f}, auroc: {test_auroc:.3f}, f1: {test_f1:.3f}, fa: {test_fa:.3f}")
+        print(f"Test - Acc: {test_acc:.3f}, AUROC: {test_auroc:.3f}, F1: {test_f1:.3f}, FA: {test_fa:.3f}")
         wandb.log({
             "Epoch": epoch,
             "Test Acc": test_acc,
@@ -285,7 +285,7 @@ class Trainer:
 
         # If less than 3 best accuracies, always save
         if len(self.top_3_valid_accs) < 3:
-            checkpoint_path = os.path.join(self.checkpoint_dir, f'checkpoint_epoch_{epoch}_acc_{valid_acc:.2f}.pt')
+            checkpoint_path = os.path.join(self.checkpoint_dir, f'model_epoch_{epoch}_acc_{valid_acc:.2f}.ckpt')
             torch.save(checkpoint, checkpoint_path)
             self.top_3_valid_accs.append((valid_acc, checkpoint_path))
             self.top_3_valid_accs.sort(reverse=True)  # Sort in descending order
@@ -297,15 +297,15 @@ class Trainer:
                 os.remove(worst_path)
 
                 # Save new checkpoint
-                checkpoint_path = os.path.join(self.checkpoint_dir, f'checkpoint_epoch_{epoch}_acc_{valid_acc:.2f}.pt')
+                checkpoint_path = os.path.join(self.checkpoint_dir, f'model_epoch_{epoch}_acc_{valid_acc:.2f}.ckpt')
                 torch.save(checkpoint, checkpoint_path)
                 self.top_3_valid_accs.append((valid_acc, checkpoint_path))
                 self.top_3_valid_accs.sort(reverse=True)  # Sort in descending order
 
         # Log the current top 3 checkpoint paths
-        print("Current Top 3 Validation Accuracy Checkpoints:")
+        print("Current top 3 validation accuracy checkpoints:")
         for acc, path in self.top_3_valid_accs:
-            print(f"Accuracy: {acc:.3f}, Path: {path}")
+            print(f"Acc: {acc:.3f}, Path: {path}")
 
     def _test_best_checkpoint(self):
         """
@@ -341,7 +341,7 @@ class Trainer:
         # Run test on the loaded model
         with torch.no_grad():
             best_test_acc, best_test_auroc, best_test_f1, best_test_fa = self.Test(self.test_dataset, self.test_loader, augment=False)
-            print(f"Best ckpt test - acc: {best_test_acc:.3f}, auroc: {best_test_auroc:.3f}, f1: {best_test_f1:.3f}, fa: {best_test_fa:.3f}")
+            print(f"Best ckpt test - Acc: {best_test_acc:.3f}, AUROC: {best_test_auroc:.3f}, F1: {best_test_f1:.3f}, FA: {best_test_fa:.3f}")
 
         # Restore the original model
         self.model = original_model
