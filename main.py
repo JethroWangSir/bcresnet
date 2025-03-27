@@ -97,7 +97,7 @@ class Trainer:
             with torch.no_grad():
                 self.model.eval()
                 valid_acc, valid_auroc, valid_f1, valid_fa = self.Test(self.valid_dataset, self.valid_loader, augment=True)
-                print("valid - acc: %.3f, auroc: %.3f, f1: %.3f, fa: %.3f" % (valid_acc, valid_auroc, valid_f1, valid_fa))
+                print(f"valid - acc: {valid_acc:.3f}, auroc: {valid_auroc:.3f}, f1: {valid_f1:.3f}, fa: {valid_fa:.3f}")
                 # wandb.log({
                 #     "Valid Acc": valid_acc,
                 #     "Valid AUROC": valid_auroc,
@@ -106,7 +106,7 @@ class Trainer:
                 # })
 
         test_acc, test_auroc, test_f1, test_fa = self.Test(self.test_dataset, self.test_loader, augment=False)  # official testset
-        print("test - acc: %.3f, auroc: %.3f, f1: %.3f, fa: %.3f" % (test_acc, test_auroc, test_f1, test_fa))
+        print(f"test - acc: {test_acc:.3f}, auroc: {test_auroc:.3f}, f1: {test_f1:.3f}, fa: {test_fa:.3f}")
         # wandb.log({
         #     "Epoch": epoch,
         #     "Test Acc": test_acc,
