@@ -66,7 +66,7 @@ class Trainer:
         Trains the model and presents the train/test progress.
         """
 
-        wandb.init(entity="jethrowang0531", project="BC-ResNet", name=f'tau_{self.tau}_ver_{self.ver}')
+        wandb.init(entity="jethrowang0531", project="BC-ResNet", name=f'sr_tau_{self.tau}_ver_{self.ver}')
 
         # train hyperparameters
         total_epoch = 200
