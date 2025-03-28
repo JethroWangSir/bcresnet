@@ -14,6 +14,8 @@ from torchvision import transforms
 from tqdm import tqdm
 from sklearn.metrics import roc_auc_score, f1_score, confusion_matrix
 import wandb
+from thop import profile
+import json
 
 from bcresnet import BCResNets
 from utils import DownloadDataset, Padding, Preprocess, SpeechCommand, SplitDataset
@@ -26,6 +28,7 @@ class Trainer:
 
         Initializes the trainer object with default values for the hyperparameters and data loaders.
         """
+
         parser = ArgumentParser()
         parser.add_argument(
             "--ver", default=1, help="google speech command set version 1 or 2", type=int
@@ -38,10 +41,11 @@ class Trainer:
         )
         parser.add_argument("--gpu", default=0, help="gpu device id", type=int)
         parser.add_argument("--download", help="download data", action="store_true")
+        parser.add_argument("--eval", help="Only run evaluation", action="store_true")
+        parser.add_argument("--ckpt", help="Path to checkpoint file for evaluation", type=str, default="")
         args = parser.parse_args()
         self.__dict__.update(vars(args))
         self.device = torch.device("cuda:%d" % self.gpu if torch.cuda.is_available() else "cpu")
-        wandb.init(entity="jethrowang0531", project="BC-ResNet", name=f'tau_{self.tau}_ver_{self.ver}')
         self._load_data()
         self._load_model()
 
@@ -52,12 +56,18 @@ class Trainer:
         self.checkpoint_dir = f"./checkpoints/tau_{self.tau}_ver_{self.ver}"
         os.makedirs(self.checkpoint_dir, exist_ok=True)
 
+        if self.eval and not self.ckpt:
+            raise ValueError("Please provide a checkpoint file using --ckpt <path> when using --eval mode.")
+
     def __call__(self):
         """
         Method that allows the object to be called like a function.
 
         Trains the model and presents the train/test progress.
         """
+
+        wandb.init(entity="jethrowang0531", project="BC-ResNet", name=f'tau_{self.tau}_ver_{self.ver}')
+
         # train hyperparameters
         total_epoch = 200
         warmup_epoch = 5
@@ -126,6 +136,8 @@ class Trainer:
         # After training, test the best checkpoint
         self._test_best_checkpoint()
 
+        wandb.finish()
+
         print("End.")
 
     def Test(self, dataset, loader, augment):
@@ -143,6 +155,8 @@ class Trainer:
             float: The F1-score for the multi-class classification task.
             float: The false alarm rate (FA), where label 0 or 1 is misclassified as label 2~11.
         """
+
+        self.model.eval()
 
         all_labels = []
         all_outputs = []  # logits
@@ -201,6 +215,7 @@ class Trainer:
 
         Downloads and splits the data if necessary.
         """
+
         print("Check google speech commands dataset v1 or v2 ...")
         if not os.path.isdir("/share/nas169/jethrowang/GSC"):
             os.mkdir("/share/nas169/jethrowang/GSC")
@@ -270,6 +285,7 @@ class Trainer:
             epoch (int): Current training epoch
             valid_acc (float): Validation accuracy for the current epoch
         """
+
         # Prepare checkpoint dictionary
         checkpoint = {
             'epoch': epoch + 1,
@@ -339,10 +355,60 @@ class Trainer:
 
         # Restore the original model
         self.model = original_model
+    
+    # def Evaluation(self):
+    #     print(f'Loading model: {self.ckpt}')
+    #     eval_ckpt = torch.load(self.ckpt)
+    #     self.model.load_state_dict(eval_ckpt['model_state_dict'])
+
+    #     with torch.no_grad():
+    #         eval_acc, eval_auroc, eval_f1, eval_fa = self.Test(self.test_dataset, self.test_loader, augment=False)
+    #         print(f"Eval - Acc: {eval_acc:.3f}, AUROC: {eval_auroc:.3f}, F1: {eval_f1:.3f}, FA: {eval_fa:.3f}")
+    
+    def Evaluation(self):
+        print(f'Loading model: {self.ckpt}')
+        eval_ckpt = torch.load(self.ckpt)
+        self.model.load_state_dict(eval_ckpt['model_state_dict'])
+
+        # Calculate number of parameters
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+
+        # Calculate MACs (Multiply-Accumulate Operations)
+        input_sample = torch.randn(1, 1, 40, 87).to(self.device)
+        macs, _ = profile(self.model, inputs=(input_sample,), verbose=False)
+
+        # Perform evaluation
+        with torch.no_grad():
+            eval_acc, eval_auroc, eval_f1, eval_fa = self.Test(self.test_dataset, self.test_loader, augment=False)
+            
+        # Print results
+        print(f"Eval - Acc: {eval_acc:.3f}, AUROC: {eval_auroc:.3f}, F1: {eval_f1:.3f}, FA: {eval_fa:.3f}")
+        print(f"Params - Total: {total_params/1000:.2f}k, Trainable: {trainable_params/1000:.2f}k")
+        print(f"MACs: {macs/1e6:.2f}M")
+
+        # Prepare results dictionary
+        results = {
+            'accuracy': eval_acc,
+            'auroc': eval_auroc,
+            'f1-score': eval_f1,
+            'false_alarm': eval_fa,
+            'params': {
+                'total_params_k': total_params/1000,
+                'trainable_params_k': trainable_params/1000
+            },
+            'macs_m': macs/1e6
+        }
+
+        # Save results to JSON in the same directory as the checkpoint
+        results_path = os.path.join(os.path.dirname(self.ckpt), 'results.json')
+        with open(results_path, 'w') as f:
+            json.dump(results, f, indent=4)
 
 
 if __name__ == "__main__":
     _trainer = Trainer()
-    _trainer()
-
-    wandb.finish()
+    if _trainer.eval:
+        _trainer.Evaluation()
+    else:
+        _trainer()
