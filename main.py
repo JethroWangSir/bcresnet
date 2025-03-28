@@ -19,6 +19,7 @@ import json
 
 from bcresnet import BCResNets
 from utils import DownloadDataset, Padding, Preprocess, SpeechCommand, SplitDataset
+from loss import softmax_loss, weighted_focal_loss
 
 
 class Trainer:
@@ -30,15 +31,11 @@ class Trainer:
         """
 
         parser = ArgumentParser()
-        parser.add_argument(
-            "--ver", default=1, help="google speech command set version 1 or 2", type=int
-        )
-        parser.add_argument(
-            "--num_classes", default=12, help="number of classes", type=int
-        )
-        parser.add_argument(
-            "--tau", default=1, help="model size", type=float, choices=[1, 1.5, 2, 3, 6, 8]
-        )
+        parser.add_argument("--ver", default=1, help="google speech command set version 1 or 2", type=int)
+        parser.add_argument("--num_classes", default=12, help="number of classes", type=int)
+        parser.add_argument("--tau", default=1, help="model size", type=float, choices=[1, 1.5, 2, 3, 6, 8])
+        parser.add_argument("--lambda1", default=1, help="weight of keyword branch", type=float)
+        parser.add_argument("--lambda2", default=1, help="weight of speech branch", type=float)
         parser.add_argument("--gpu", default=0, help="gpu device id", type=int)
         parser.add_argument("--download", help="download data", action="store_true")
         parser.add_argument("--eval", help="Only run evaluation", action="store_true")
@@ -75,7 +72,14 @@ class Trainer:
         lr_lower_limit = 0
 
         # optimizer
-        optimizer = torch.optim.SGD(self.model.parameters(), lr=0, weight_decay=1e-3, momentum=0.9)
+        optimizer_encoder = torch.optim.SGD(
+            list(self.model.cnn_head.parameters()) + list(self.model.BCBlocks.parameters()), 
+            lr=0, weight_decay=1e-3, momentum=0.9
+        )
+        optimizer_cls1 = torch.optim.SGD(self.model.classifier1.parameters(), lr=0, momentum=0.9)
+        optimizer_cls2 = torch.optim.SGD(self.model.classifier2.parameters(), lr=0, momentum=0.9)
+        optimizer_cls3 = torch.optim.SGD(self.model.classifier3.parameters(), lr=0, momentum=0.9)
+        
         n_step_warmup = len(self.train_loader) * warmup_epoch
         total_iter = len(self.train_loader) * total_epoch
         iterations = 0
@@ -98,18 +102,51 @@ class Trainer:
                             np.pi * (iterations - n_step_warmup) / (total_iter - n_step_warmup)
                         )
                     )
-                for param_group in optimizer.param_groups:
+                for param_group in optimizer_encoder.param_groups:
+                    param_group["lr"] = lr
+                for param_group in optimizer_cls1.param_groups:
+                    param_group["lr"] = lr
+                for param_group in optimizer_cls2.param_groups:
+                    param_group["lr"] = lr
+                for param_group in optimizer_cls3.param_groups:
                     param_group["lr"] = lr
 
                 inputs, labels = sample
                 inputs = inputs.to(self.device)
                 labels = labels.to(self.device)
+
+                # Make labels1 (speech or not), labels2 (keyword or not), labels3 (which keyword)
+                # ...
+
                 inputs = self.preprocess_train(inputs, labels, augment=True)
-                outputs = self.model(inputs)
-                loss = F.cross_entropy(outputs, labels)
-                wandb.log({"Softmax Loss": loss.item()})
+
+                # Classify inputs for different classifiers
+                embeddings = self.model.encode(inputs)
+                # ...
+
+                # Forward
+                if keyword:
+                    outputs3 = self.model.keyword_classification(keyword_embeddings)
+                elif speech:
+                    outputs2 = self.model.keyword_branch(speech_embeddings)
+                else:
+                    outputs1 = self.model.speech_branch(embeddings)
+
+                # Loss for each classifier
+                loss_speech = weighted_focal_loss(outputs1, labels1)
+                loss_keyword = weighted_focal_loss(outputs2, labels2)
+                loss_softmax = softmax_loss(outputs3, labels3)
+                loss = loss_softmax + self.lambda1 * loss_keyword + self.lambda2 * loss_speech
+                wandb.log({"Softmax Loss": loss_softmax.item(), "Keyword Loss": loss_keyword.item(), "Speech Loss": loss_speech.item()})
+
                 loss.backward()
-                optimizer.step()
+
+                # Update the encoder and classifiers
+                optimizer_encoder.step()
+                optimizer_cls1.step()
+                optimizer_cls2.step()
+                optimizer_cls3.step()
+
                 self.model.zero_grad()
 
             # valid
@@ -355,15 +392,6 @@ class Trainer:
 
         # Restore the original model
         self.model = original_model
-    
-    # def Evaluation(self):
-    #     print(f'Loading model: {self.ckpt}')
-    #     eval_ckpt = torch.load(self.ckpt)
-    #     self.model.load_state_dict(eval_ckpt['model_state_dict'])
-
-    #     with torch.no_grad():
-    #         eval_acc, eval_auroc, eval_f1, eval_fa = self.Test(self.test_dataset, self.test_loader, augment=False)
-    #         print(f"Eval - Acc: {eval_acc:.3f}, AUROC: {eval_auroc:.3f}, F1: {eval_f1:.3f}, FA: {eval_fa:.3f}")
     
     def Evaluation(self):
         print(f'Loading model: {self.ckpt}')

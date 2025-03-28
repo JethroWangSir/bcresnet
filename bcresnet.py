@@ -1,6 +1,7 @@
 # Copyright (c) 2023 Qualcomm Technologies, Inc.
 # All Rights Reserved.
 
+import torch
 import torch.nn.functional as F
 from torch import nn
 
@@ -160,8 +161,8 @@ class BCResNets(nn.Module):
             use_stride = idx in self.s
             self.BCBlocks.append(BCBlockStage(n, self.c[idx], self.c[idx + 1], idx, use_stride))
 
-        # Classifier
-        self.classifier = nn.Sequential(
+        # Speech branch
+        self.classifier1 = nn.Sequential(
             nn.Conv2d(
                 self.c[-2], self.c[-2], (5, 5), bias=False, groups=self.c[-2], padding=(0, 2)
             ),
@@ -169,14 +170,88 @@ class BCResNets(nn.Module):
             nn.BatchNorm2d(self.c[-1]),
             nn.ReLU(True),
             nn.AdaptiveAvgPool2d((1, 1)),
-            nn.Conv2d(self.c[-1], self.num_classes, 1),
+            nn.Conv2d(self.c[-1], 1, 1),
         )
+
+        # Keyword branch
+        self.classifier2 = nn.Sequential(
+            nn.Conv2d(
+                self.c[-2], self.c[-2], (5, 5), bias=False, groups=self.c[-2], padding=(0, 2)
+            ),
+            nn.Conv2d(self.c[-2], self.c[-1], 1, bias=False),
+            nn.BatchNorm2d(self.c[-1]),
+            nn.ReLU(True),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Conv2d(self.c[-1], 1, 1),
+        )
+
+        # Keyword classification
+        self.classifier3 = nn.Sequential(
+            nn.Conv2d(
+                self.c[-2], self.c[-2], (5, 5), bias=False, groups=self.c[-2], padding=(0, 2)
+            ),
+            nn.Conv2d(self.c[-2], self.c[-1], 1, bias=False),
+            nn.BatchNorm2d(self.c[-1]),
+            nn.ReLU(True),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Conv2d(self.c[-1], self.num_classes-2, 1),
+        )
+
+    def encode(self, x):
+        x = self.cnn_head(x)
+        for i, num_modules in enumerate(self.n):
+            for j in range(num_modules):
+                x = self.BCBlocks[i][j](x)
+
+        return x
+    
+    def speech_branch(self, x):
+        x = self.classifier1(x)
+        x = x.view(-1, x.shape[1])
+
+        return x
+    
+    def keyword_branch(self, x):
+        x = self.classifier2(x)
+        x = x.view(-1, x.shape[1])
+
+        return x
+    
+    def keyword_classification(self, x):
+        x = self.classifier3(x)
+        x = x.view(-1, x.shape[1])
+
+        return x
 
     def forward(self, x):
         x = self.cnn_head(x)
         for i, num_modules in enumerate(self.n):
             for j in range(num_modules):
                 x = self.BCBlocks[i][j](x)
-        x = self.classifier(x)
-        x = x.view(-1, x.shape[1])
-        return x
+
+        # Step 1: Speech vs. Non-speech classification
+        x1 = self.classifier1(x)
+        x1 = x1.view(-1, x1.shape[1])  # [batch, 1] -> P(speech)
+        P_speech = x1.sigmoid()
+        P_non_speech = 1.0 - P_speech
+
+        # Step 2: Keyword vs. Non-keyword classification (within speech)
+        x2 = self.classifier2(x)
+        x2 = x2.view(-1, x2.shape[1])  # [batch, 1] -> P(keyword | speech)
+        P_keyword_given_speech = x2.sigmoid()
+        P_non_keyword_given_speech = 1.0 - P_keyword_given_speech
+
+        # Step 3: Keyword classification (only if keyword is detected)
+        x3 = self.classifier3(x)
+        x3 = x3.view(-1, x3.shape[1])  # [batch, 10] -> P(keyword_id | keyword)
+        P_keyword_id_given_keyword = x3.softmax(dim=1)
+
+        # Compute final probabilities
+        P_keyword = P_speech * P_keyword_given_speech  # P(keyword) = P(speech) * P(keyword | speech)
+        P_non_keyword_speech_final = P_speech * P_non_keyword_given_speech  # P(non-keyword speech) = P(speech) * (1 - P(keyword | speech))
+        P_keyword_final = P_keyword * P_keyword_id_given_keyword  # P(keyword_id) = P(keyword) * P(keyword_id | keyword)
+
+        # Concatenate to form the final probability distribution [batch, 12]
+        P_total = torch.cat([P_non_speech, P_non_keyword_speech_final, P_keyword_final], dim=1)  # [batch, 12]
+
+        return P_total
