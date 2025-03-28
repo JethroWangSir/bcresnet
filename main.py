@@ -356,15 +356,6 @@ class Trainer:
         # Restore the original model
         self.model = original_model
     
-    # def Evaluation(self):
-    #     print(f'Loading model: {self.ckpt}')
-    #     eval_ckpt = torch.load(self.ckpt)
-    #     self.model.load_state_dict(eval_ckpt['model_state_dict'])
-
-    #     with torch.no_grad():
-    #         eval_acc, eval_auroc, eval_f1, eval_fa = self.Test(self.test_dataset, self.test_loader, augment=False)
-    #         print(f"Eval - Acc: {eval_acc:.3f}, AUROC: {eval_auroc:.3f}, F1: {eval_f1:.3f}, FA: {eval_fa:.3f}")
-    
     def Evaluation(self):
         print(f'Loading model: {self.ckpt}')
         eval_ckpt = torch.load(self.ckpt)
