@@ -217,9 +217,9 @@ class Trainer:
         """
 
         print("Check google speech commands dataset v1 or v2 ...")
-        if not os.path.isdir("/share/nas169/jethrowang/GSC"):
-            os.mkdir("/share/nas169/jethrowang/GSC")
-        base_dir = "/share/nas169/jethrowang/GSC/speech_commands_v0.01"
+        if not os.path.isdir("/share/nas169/jethrowang/DB/GSC"):
+            os.mkdir("/share/nas169/jethrowang/DB/GSC")
+        base_dir = "/share/nas169/jethrowang/DB/GSC/speech_commands_v0.01"
         url = "https://storage.googleapis.com/download.tensorflow.org/data/speech_commands_v0.01.tar.gz"
         url_test = "https://storage.googleapis.com/download.tensorflow.org/data/speech_commands_test_set_v0.01.tar.gz"
         if self.ver == 2:
