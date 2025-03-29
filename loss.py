@@ -38,7 +38,7 @@ def softmax_loss(logits, targets):
 #     loss = -alpha * focal_weight * log_pt
 #     return loss.mean()
 
-def weighted_focal_loss(logits, targets, gamma=2.0):
+def weighted_focal_loss(logits, targets, gamma=2.0, num_classes=2):
     """
     Computes the weighted focal loss with class weights inversely proportional to class frequencies.
     
@@ -48,8 +48,6 @@ def weighted_focal_loss(logits, targets, gamma=2.0):
     :return: Scalar loss value.
     """
 
-    # Compute class counts
-    num_classes = 2
     class_counts = torch.bincount(targets, minlength=num_classes).float()
     
     # Compute inverse class weights
@@ -60,6 +58,7 @@ def weighted_focal_loss(logits, targets, gamma=2.0):
     targets_one_hot = F.one_hot(targets, num_classes=num_classes).float()
     
     pt = (probs * targets_one_hot).sum(dim=1)  # Get the probability of the true class
+    # print(f'pt: {pt}')
     log_pt = torch.log(pt + 1e-8)  # Avoid log(0)
     
     focal_weight = (1 - pt) ** gamma

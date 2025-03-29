@@ -66,7 +66,7 @@ class Trainer:
         wandb.init(entity="jethrowang0531", project="BC-ResNet", name=f'sr_tau_{self.tau}_ver_{self.ver}')
 
         # train hyperparameters
-        total_epoch = 200
+        total_epoch = 25
         warmup_epoch = 5
         init_lr = 1e-1
         lr_lower_limit = 0
