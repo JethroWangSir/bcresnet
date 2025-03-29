@@ -50,7 +50,7 @@ class Trainer:
         self.top_3_valid_accs = []
         
         # Create a directory to save checkpoints if it doesn't exist
-        self.checkpoint_dir = f"./checkpoints/tau_{self.tau}_ver_{self.ver}"
+        self.checkpoint_dir = f"./checkpoints/sr_tau_{self.tau}_ver_{self.ver}"
         os.makedirs(self.checkpoint_dir, exist_ok=True)
 
         if self.eval and not self.ckpt:
@@ -358,6 +358,20 @@ class Trainer:
         print("Current top 3 validation accuracy checkpoints:")
         for acc, path in self.top_3_valid_accs:
             print(f"Acc: {acc:.3f}, Path: {path}")
+    
+    def _calculate_params(self, model):
+        # Calculate number of parameters
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+        return total_params, trainable_params
+
+    def _calculate_macs(self, model):
+        # Calculate MACs (Multiply-Accumulate Operations)
+        input_sample = torch.randn(1, 1, 40, 87).to(self.device)
+        macs, _ = profile(model, inputs=(input_sample,), verbose=False)
+
+        return macs
 
     def _test_best_checkpoint(self):
         """
@@ -394,6 +408,30 @@ class Trainer:
         with torch.no_grad():
             best_test_acc, best_test_auroc, best_test_f1, best_test_fa = self.Test(self.test_dataset, self.test_loader, augment=False)
             print(f"Best ckpt test - Acc: {best_test_acc:.3f}, AUROC: {best_test_auroc:.3f}, F1: {best_test_f1:.3f}, FA: {best_test_fa:.3f}")
+        
+        # Calculate number of parameters
+        total_params, trainable_params = self._calculate_params(self.model)
+
+        # Calculate MACs (Multiply-Accumulate Operations)
+        macs = self._calculate_macs(self.model)
+
+        # Prepare results dictionary
+        results = {
+            'accuracy': best_test_acc,
+            'auroc': best_test_auroc,
+            'f1-score': best_test_f1,
+            'false_alarm': best_test_fa,
+            'params': {
+                'total_params_k': total_params/1000,
+                'trainable_params_k': trainable_params/1000
+            },
+            'macs_m': macs/1e6
+        }
+
+        # Save results to JSON
+        results_path = os.path.join(self.checkpoint_dir, 'results.json')
+        with open(results_path, 'w') as f:
+            json.dump(results, f, indent=4)
 
         # Restore the original model
         self.model = original_model
@@ -404,12 +442,10 @@ class Trainer:
         self.model.load_state_dict(eval_ckpt['model_state_dict'])
 
         # Calculate number of parameters
-        total_params = sum(p.numel() for p in self.model.parameters())
-        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        total_params, trainable_params = self._calculate_params(self.model)
 
         # Calculate MACs (Multiply-Accumulate Operations)
-        input_sample = torch.randn(1, 1, 40, 87).to(self.device)
-        macs, _ = profile(self.model, inputs=(input_sample,), verbose=False)
+        macs = self._calculate_macs(self.model)
 
         # Perform evaluation
         with torch.no_grad():
