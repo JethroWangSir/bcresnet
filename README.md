@@ -34,11 +34,11 @@ Here are some examples of how to use the code:
 
 1. To use BCResNet-8 with GPU 0 and GSC dataset v2, and download the dataset, run the following command:
 ```
-python main.py --tau 8 --gpu 0 --ver 2 --download
+python main.py --tau 8 --gpu 0 --ver 2 --download --lambda1 1 --lambda2 1
 ```
 2. To use BCResNet-1 with GPU 1 and GSC dataset v1, and skip downloading the dataset, run the following command:
 ```
-python main.py --tau 1 --gpu 1 --ver 1
+python main.py --tau 1 --gpu 1 --ver 1 --lambda1 1 --lambda2 1
 ```
 The downloaded dataset will be saved to the data/ directory by default.
 

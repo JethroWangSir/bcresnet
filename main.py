@@ -114,41 +114,41 @@ class Trainer:
                 # Extract inputs and labels
                 inputs, labels = sample
                 inputs = inputs.to(self.device)
-                print(f'inputs: {inputs.shape}')
+                # print(f'inputs: {inputs.shape}')
                 labels = labels.to(self.device)
-                print(f'labels: {labels.shape}, {labels}')
+                # print(f'labels: {labels.shape}, {labels}')
 
                 # Define labels1, labels2, labels3
                 labels1 = (labels != 0).long()  # 0 -> non-speech, 1~11 -> speech
-                print(f'labels1: {labels1.shape}, {labels1}')
+                # print(f'labels1: {labels1.shape}, {labels1}')
                 labels2 = labels[labels > 0]
                 labels2 = (labels2 >= 2).long()   # 1 -> non-keyword, 2~11 -> keyword
-                print(f'labels2: {labels2.shape}, {labels2}')
+                # print(f'labels2: {labels2.shape}, {labels2}')
                 labels3 = labels[labels > 1]
                 labels3 = torch.where(labels3 >= 2, labels3 - 2, torch.tensor(-1, device=self.device))  # labels3 keeps only 2~11 (mapped to 0~9), others are set to -1 (invalid labels)
-                print(f'labels3: {labels3.shape}, {labels3}')
+                # print(f'labels3: {labels3.shape}, {labels3}')
 
                 # Preprocess inputs
                 inputs = self.preprocess_train(inputs, labels, augment=True)
-                print(f'processed_inputs: {inputs.shape}')
+                # print(f'processed_inputs: {inputs.shape}')
 
                 # Get embeddings
                 embeddings = self.model.encode(inputs)
-                print(f'embeddings: {embeddings.shape}')
+                # print(f'embeddings: {embeddings.shape}')
                 
                 # Classify for speech/non-speech
                 outputs1 = self.model.speech_branch(embeddings)  # Speech/Non-speech
-                print(f'outputs1: {outputs1.shape}')
+                # print(f'outputs1: {outputs1.shape}')
 
                 # Only pass embeddings with labels 1–11 to keyword_branch
                 keyword_embeddings = embeddings[labels > 0]
                 outputs2 = self.model.keyword_branch(keyword_embeddings)  # Keyword/Non-keyword
-                print(f'outputs2: {outputs2.shape}')
+                # print(f'outputs2: {outputs2.shape}')
 
                 # Only pass embeddings with labels 2–11 to keyword_classification
                 keyword_class_embeddings = embeddings[labels >= 2]
                 outputs3 = self.model.keyword_classification(keyword_class_embeddings)  # Keyword classification (10 classes)
-                print(f'outputs3: {outputs3.shape}')
+                # print(f'outputs3: {outputs3.shape}')
 
                 # Compute Losses
                 loss_speech = weighted_focal_loss(outputs1, labels1)
