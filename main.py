@@ -76,9 +76,9 @@ class Trainer:
             list(self.model.cnn_head.parameters()) + list(self.model.BCBlocks.parameters()), 
             lr=0, weight_decay=1e-3, momentum=0.9
         )
-        optimizer_cls1 = torch.optim.SGD(self.model.classifier1.parameters(), lr=0, momentum=0.9)
-        optimizer_cls2 = torch.optim.SGD(self.model.classifier2.parameters(), lr=0, momentum=0.9)
-        optimizer_cls3 = torch.optim.SGD(self.model.classifier3.parameters(), lr=0, momentum=0.9)
+        optimizer_cls1 = torch.optim.SGD(self.model.classifier1.parameters(), lr=0, weight_decay=1e-3, momentum=0.9)
+        optimizer_cls2 = torch.optim.SGD(self.model.classifier2.parameters(), lr=0, weight_decay=1e-3, momentum=0.9)
+        optimizer_cls3 = torch.optim.SGD(self.model.classifier3.parameters(), lr=0, weight_decay=1e-3, momentum=0.9)
         
         n_step_warmup = len(self.train_loader) * warmup_epoch
         total_iter = len(self.train_loader) * total_epoch
