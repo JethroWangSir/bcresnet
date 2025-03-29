@@ -41,6 +41,7 @@ python main.py --tau 8 --gpu 0 --ver 2 --download
 python main.py --tau 1 --gpu 1 --ver 1
 ```
 The downloaded dataset will be saved to the data/ directory by default.
+
 3. To test your model with GPU 0 and GSC dataset v1, run the following command:
 ```
 python main.py --eval --ckpt path/to/your/model --tau 1 --gpu 0 --ver 1
