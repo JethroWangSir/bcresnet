@@ -111,33 +111,39 @@ class Trainer:
                 for param_group in optimizer_cls3.param_groups:
                     param_group["lr"] = lr
 
+                # Extract inputs and labels
                 inputs, labels = sample
                 inputs = inputs.to(self.device)
                 labels = labels.to(self.device)
 
-                # Make labels1 (speech or not), labels2 (keyword or not), labels3 (which keyword)
-                # ...
+                # Define labels1, labels2, labels3
+                labels1 = (labels != 0).long()  # 0 -> non-speech, 1~11 -> speech
+                labels2 = (labels > 1).long()   # 1 -> non-keyword, 2~11 -> keyword
+                labels3 = torch.where(labels >= 2, labels - 2, torch.tensor(-1, device=self.device))  # labels3 keeps only 2~11 (mapped to 0~9), others are set to -1 (invalid labels)
 
+                # Preprocess inputs
                 inputs = self.preprocess_train(inputs, labels, augment=True)
 
-                # Classify inputs for different classifiers
+                # Get embeddings
                 embeddings = self.model.encode(inputs)
-                # ...
+                
+                # Classify for speech/non-speech
+                outputs1 = self.model.speech_branch(embeddings)  # Speech/Non-speech
 
-                # Forward
-                if keyword:
-                    outputs3 = self.model.keyword_classification(keyword_embeddings)
-                elif speech:
-                    outputs2 = self.model.keyword_branch(speech_embeddings)
-                else:
-                    outputs1 = self.model.speech_branch(embeddings)
+                # Only pass embeddings with labels 1–11 to keyword_branch
+                keyword_embeddings = embeddings[labels > 0]
+                outputs2 = self.model.keyword_branch(keyword_embeddings)  # Keyword/Non-keyword
 
-                # Loss for each classifier
+                # Only pass embeddings with labels 2–11 to keyword_classification
+                keyword_class_embeddings = embeddings[labels >= 2]
+                outputs3 = self.model.keyword_classification(keyword_class_embeddings)  # Keyword classification (10 classes)
+
+                # Compute Losses
                 loss_speech = weighted_focal_loss(outputs1, labels1)
-                loss_keyword = weighted_focal_loss(outputs2, labels2)
-                loss_softmax = softmax_loss(outputs3, labels3)
+                loss_keyword = weighted_focal_loss(outputs2, labels2)  # Only compute for 1~11
+                loss_softmax = softmax_loss(outputs3, labels3)  # Only compute for 2~11
                 loss = loss_softmax + self.lambda1 * loss_keyword + self.lambda2 * loss_speech
-                wandb.log({"Softmax Loss": loss_softmax.item(), "Keyword Loss": loss_keyword.item(), "Speech Loss": loss_speech.item()})
+                wandb.log({"Total Loss": loss.item(), "Softmax Loss": loss_softmax.item(), "Keyword Loss": loss_keyword.item(), "Speech Loss": loss_speech.item()})
 
                 loss.backward()
 
@@ -196,7 +202,7 @@ class Trainer:
         self.model.eval()
 
         all_labels = []
-        all_outputs = []  # logits
+        all_outputs = []  # probabilities
         all_predictions = []
 
         true_count = 0.0
@@ -209,12 +215,12 @@ class Trainer:
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
             inputs = self.preprocess_test(inputs, labels=labels, is_train=False, augment=augment)
-            outputs = self.model(inputs)
+            outputs = self.model(inputs)  # already probabilities
 
             # Collect all predictions and labels
             prediction = torch.argmax(outputs, dim=-1)
             all_labels.extend(labels.cpu().numpy())
-            all_outputs.extend(outputs.cpu().detach().numpy())  # logits
+            all_outputs.extend(outputs.cpu().detach().numpy())  # probabilities
             all_predictions.extend(prediction.cpu().numpy())
 
             # Update confusion matrix
@@ -226,11 +232,10 @@ class Trainer:
         acc = true_count / num_testdata * 100.0  # percentage
 
         # AUROC calculation
-        all_outputs_prob = torch.softmax(torch.from_numpy(np.array(all_outputs)), dim=1).cpu().numpy()
         if len(set(all_labels)) < self.num_classes:
             auroc = float('nan')
         else:
-            auroc = roc_auc_score(np.array(all_labels), all_outputs_prob, average='macro', multi_class='ovr') * 100.0
+            auroc = roc_auc_score(np.array(all_labels), np.array(all_outputs), average='macro', multi_class='ovr') * 100.0
         
         # F1-score calculation
         f1 = f1_score(np.array(all_labels), np.array(all_predictions), average='macro') * 100.0

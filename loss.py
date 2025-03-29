@@ -10,7 +10,7 @@ def softmax_loss(logits, targets):
     :return: Scalar loss value.
     """
     
-    return F.cross_entropy(logits, targets)
+    return F.cross_entropy(logits, targets, ignore_index=-1)
 
 def weighted_focal_loss(logits, targets, alpha=0.25, gamma=2.0, weight=None):
     """

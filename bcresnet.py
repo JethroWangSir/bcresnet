@@ -224,10 +224,7 @@ class BCResNets(nn.Module):
         return x
 
     def forward(self, x):
-        x = self.cnn_head(x)
-        for i, num_modules in enumerate(self.n):
-            for j in range(num_modules):
-                x = self.BCBlocks[i][j](x)
+        x = self.encode(x)
 
         # Step 1: Speech vs. Non-speech classification
         x1 = self.classifier1(x)
