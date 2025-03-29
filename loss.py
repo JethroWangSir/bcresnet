@@ -24,7 +24,7 @@ def weighted_focal_loss(logits, targets, alpha=0.25, gamma=2.0, weight=None):
     """
 
     probs = F.softmax(logits, dim=1)  # Convert logits to probabilities
-    targets_one_hot = F.one_hot(targets, num_classes=logits.size(1)).float()
+    targets_one_hot = F.one_hot(targets, num_classes=2).float()
     
     pt = (probs * targets_one_hot).sum(dim=1)  # Get the probability of the true class
     log_pt = torch.log(pt + 1e-8)  # Avoid log(0)
