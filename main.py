@@ -16,10 +16,10 @@ from sklearn.metrics import roc_auc_score, f1_score, confusion_matrix
 import wandb
 from thop import profile
 import json
+from torchvision.ops import sigmoid_focal_loss
 
 from bcresnet import BCResNets
 from utils import DownloadDataset, Padding, Preprocess, SpeechCommand, SplitDataset
-from loss import softmax_loss, weighted_focal_loss
 
 
 class Trainer:
@@ -125,8 +125,12 @@ class Trainer:
                 # Define labels1, labels2, labels3
                 labels1 = (labels != 0).long()  # 0 -> non-speech, 1~11 -> speech
                 # print(f'labels1: {labels1.shape}, {labels1}')
+                alpha1 = labels1.sum().item() / len(labels1)  # positive ratio in labels1
+                # print(f'alpha1: {alpha1}')
                 labels2 = (labels[labels > 0] >= 2).long()   # 1 -> non-keyword, 2~11 -> keyword
                 # print(f'labels2: {labels2.shape}, {labels2}')
+                alpha2 = labels2.sum().item() / len(labels2)  # positive ratio in labels2
+                # print(f'alpha2: {alpha2}')
                 labels3 = torch.where(labels[labels > 1] >= 2, labels[labels > 1] - 2, torch.tensor(-1, device=self.device))  # labels3 keeps only 2~11 (mapped to 0~9), others are set to -1 (invalid labels)
                 # print(f'labels3: {labels3.shape}, {labels3}')
 
@@ -153,9 +157,9 @@ class Trainer:
                 # print(f'outputs3: {outputs3.shape}')
 
                 # Compute Losses
-                loss_speech = weighted_focal_loss(outputs1, labels1)
-                loss_keyword = weighted_focal_loss(outputs2, labels2)  # Only compute for 1~11
-                loss_softmax = softmax_loss(outputs3, labels3)  # Only compute for 2~11
+                loss_speech = sigmoid_focal_loss(inputs=outputs1, targets=labels1, alpha=alpha1, reduction='mean')
+                loss_keyword = sigmoid_focal_loss(inputs=outputs2, targets=labels2, alpha=alpha2, reduction='mean')  # Only compute for 1~11
+                loss_softmax = F.cross_entropy(outputs3, labels3, ignore_index=-1)  # Only compute for 2~11
                 loss = loss_softmax + self.lambda1 * loss_keyword + self.lambda2 * loss_speech
                 wandb.log({"Total Loss": loss.item(), "Softmax Loss": loss_softmax.item(), "Keyword Loss": loss_keyword.item(), "Speech Loss": loss_speech.item()})
 
