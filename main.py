@@ -123,11 +123,11 @@ class Trainer:
                 # print(f'labels: {labels.shape}, {labels}')
 
                 # Define labels1, labels2, labels3
-                labels1 = (labels != 0).long()  # 0 -> non-speech, 1~11 -> speech
+                labels1 = (labels != 0).long().float()  # 0 -> non-speech, 1~11 -> speech
                 # print(f'labels1: {labels1.shape}, {labels1}')
                 alpha1 = labels1.sum().item() / len(labels1)  # positive ratio in labels1
                 # print(f'alpha1: {alpha1}')
-                labels2 = (labels[labels > 0] >= 2).long()   # 1 -> non-keyword, 2~11 -> keyword
+                labels2 = (labels[labels > 0] >= 2).long().float()   # 1 -> non-keyword, 2~11 -> keyword
                 # print(f'labels2: {labels2.shape}, {labels2}')
                 alpha2 = labels2.sum().item() / len(labels2)  # positive ratio in labels2
                 # print(f'alpha2: {alpha2}')
