@@ -157,8 +157,8 @@ class Trainer:
                 # print(f'outputs3: {outputs3.shape}')
 
                 # Compute Losses
-                loss_speech = sigmoid_focal_loss(inputs=outputs1, targets=labels1, alpha=alpha1, reduction='mean')
-                loss_keyword = sigmoid_focal_loss(inputs=outputs2, targets=labels2, alpha=alpha2, reduction='mean')  # Only compute for 1~11
+                loss_speech = sigmoid_focal_loss(inputs=outputs1, targets=labels1.unsqueeze(1), alpha=alpha1, reduction='mean')
+                loss_keyword = sigmoid_focal_loss(inputs=outputs2, targets=labels2.unsqueeze(1), alpha=alpha2, reduction='mean')  # Only compute for 1~11
                 loss_softmax = F.cross_entropy(outputs3, labels3, ignore_index=-1)  # Only compute for 2~11
                 loss = loss_softmax + self.lambda1 * loss_keyword + self.lambda2 * loss_speech
                 wandb.log({"Total Loss": loss.item(), "Softmax Loss": loss_softmax.item(), "Keyword Loss": loss_keyword.item(), "Speech Loss": loss_speech.item()})
