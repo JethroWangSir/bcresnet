@@ -146,12 +146,12 @@ class Trainer:
                 outputs1 = self.model.speech_branch(embeddings)  # Speech/Non-speech
                 # print(f'outputs1: {outputs1.shape}')
 
-                # Only pass embeddings with labels 1–11 to keyword_branch
-                keyword_embeddings = embeddings[labels > 0]
+                # Only pass embeddings with labels 1~11 to keyword_branch
+                keyword_embeddings = embeddings[labels >= 1]
                 outputs2 = self.model.keyword_branch(keyword_embeddings)  # Keyword/Non-keyword
                 # print(f'outputs2: {outputs2.shape}')
 
-                # Only pass embeddings with labels 2–11 to keyword_classification
+                # Only pass embeddings with labels 2~11 to keyword_classification
                 keyword_class_embeddings = embeddings[labels >= 2]
                 outputs3 = self.model.keyword_classification(keyword_class_embeddings)  # Keyword classification (10 classes)
                 # print(f'outputs3: {outputs3.shape}')
