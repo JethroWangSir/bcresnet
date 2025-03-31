@@ -16,7 +16,6 @@ from sklearn.metrics import roc_auc_score, f1_score, confusion_matrix
 import wandb
 from thop import profile
 import json
-from torchvision.ops import sigmoid_focal_loss
 
 from bcresnet import BCResNets
 from utils import DownloadDataset, Padding, Preprocess, SpeechCommand, SplitDataset
@@ -66,26 +65,23 @@ class Trainer:
         wandb.init(entity="jethrowang0531", project="BC-ResNet", name=f'sr_tau_{self.tau}_ver_{self.ver}')
 
         # train hyperparameters
-        total_epoch = 25  # Total training epochs
-        init_lr = 0.004  # Initial learning rate
-        peak_lr = 0.1  # Peak learning rate
-        final_lr = 4e-6  # Minimum learning rate
-        peak_epoch = 7  # Epoch at which LR reaches its peak
-        momentum_min = 0.85
-        momentum_max = 0.95
-
-        total_iter = len(self.train_loader) * total_epoch  # Total training iterations
-        peak_iter = len(self.train_loader) * peak_epoch  # Iteration when LR peaks
-        iterations = 0
+        total_epoch = 200
+        warmup_epoch = 5
+        init_lr = 1e-1
+        lr_lower_limit = 0
 
         # optimizer
         optimizer_encoder = torch.optim.SGD(
             list(self.model.cnn_head.parameters()) + list(self.model.BCBlocks.parameters()), 
-            lr=init_lr, weight_decay=1e-3, momentum=momentum_min
+            lr=0, weight_decay=1e-3, momentum=0.9
         )
-        optimizer_cls1 = torch.optim.SGD(self.model.classifier1.parameters(), lr=init_lr, weight_decay=1e-3, momentum=momentum_min)
-        optimizer_cls2 = torch.optim.SGD(self.model.classifier2.parameters(), lr=init_lr, weight_decay=1e-3, momentum=momentum_min)
-        optimizer_cls3 = torch.optim.SGD(self.model.classifier3.parameters(), lr=init_lr, weight_decay=1e-3, momentum=momentum_min)
+        optimizer_cls1 = torch.optim.SGD(self.model.classifier1.parameters(), lr=0, weight_decay=1e-3, momentum=0.9)
+        optimizer_cls2 = torch.optim.SGD(self.model.classifier2.parameters(), lr=0, weight_decay=1e-3, momentum=0.9)
+        optimizer_cls3 = torch.optim.SGD(self.model.classifier3.parameters(), lr=0, weight_decay=1e-3, momentum=0.9)
+        
+        n_step_warmup = len(self.train_loader) * warmup_epoch
+        total_iter = len(self.train_loader) * total_epoch
+        iterations = 0
 
         # Best model tracking
         best_valid_acc = 0
@@ -94,26 +90,25 @@ class Trainer:
         for epoch in range(total_epoch):
             self.model.train()
             for sample in tqdm(self.train_loader, desc="epoch %d, iters" % (epoch + 1)):
+                # lr cos schedule
                 iterations += 1
-                
-                # One-cycle learning rate scheduling
-                if iterations <= peak_iter:
-                    lr = init_lr + (peak_lr - init_lr) * iterations / peak_iter
+                if iterations < n_step_warmup:
+                    lr = init_lr * iterations / n_step_warmup
                 else:
-                    lr = final_lr + 0.5 * (peak_lr - final_lr) * (
-                        1 + np.cos(np.pi * (iterations - peak_iter) / (total_iter - peak_iter))
+                    lr = lr_lower_limit + 0.5 * (init_lr - lr_lower_limit) * (
+                        1
+                        + np.cos(
+                            np.pi * (iterations - n_step_warmup) / (total_iter - n_step_warmup)
+                        )
                     )
-
-                # Momentum scheduling
-                momentum = momentum_min + (momentum_max - momentum_min) * (
-                    1 - iterations / total_iter
-                )
-
-                # Apply learning rate and momentum updates
-                for optimizer in [optimizer_encoder, optimizer_cls1, optimizer_cls2, optimizer_cls3]:
-                    for param_group in optimizer.param_groups:
-                        param_group["lr"] = lr
-                        param_group["momentum"] = momentum
+                for param_group in optimizer_encoder.param_groups:
+                    param_group["lr"] = lr
+                for param_group in optimizer_cls1.param_groups:
+                    param_group["lr"] = lr
+                for param_group in optimizer_cls2.param_groups:
+                    param_group["lr"] = lr
+                for param_group in optimizer_cls3.param_groups:
+                    param_group["lr"] = lr
 
                 # Extract inputs and labels
                 inputs, labels = sample
@@ -176,7 +171,7 @@ class Trainer:
 
             # valid
             print("cur lr check ... %.4f" % lr)
-            wandb.log({"LR": lr, "Momentum": momentum})
+            wandb.log({"LR": lr})
             with torch.no_grad():
                 self.model.eval()
                 valid_acc, valid_auroc, valid_f1, valid_fa = self.Test(self.valid_dataset, self.valid_loader, augment=True)

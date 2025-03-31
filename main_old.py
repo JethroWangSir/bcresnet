@@ -16,10 +16,10 @@ from sklearn.metrics import roc_auc_score, f1_score, confusion_matrix
 import wandb
 from thop import profile
 import json
+from torchvision.ops import sigmoid_focal_loss
 
 from bcresnet import BCResNets
 from utils import DownloadDataset, Padding, Preprocess, SpeechCommand, SplitDataset
-from loss import softmax_loss, weighted_focal_loss
 
 
 class Trainer:
@@ -66,23 +66,26 @@ class Trainer:
         wandb.init(entity="jethrowang0531", project="BC-ResNet", name=f'sr_tau_{self.tau}_ver_{self.ver}')
 
         # train hyperparameters
-        total_epoch = 25
-        warmup_epoch = 5
-        init_lr = 1e-1
-        lr_lower_limit = 0
+        total_epoch = 25  # Total training epochs
+        init_lr = 0.004  # Initial learning rate
+        peak_lr = 0.1  # Peak learning rate
+        final_lr = 4e-6  # Minimum learning rate
+        peak_epoch = 7  # Epoch at which LR reaches its peak
+        momentum_min = 0.85
+        momentum_max = 0.95
+
+        total_iter = len(self.train_loader) * total_epoch  # Total training iterations
+        peak_iter = len(self.train_loader) * peak_epoch  # Iteration when LR peaks
+        iterations = 0
 
         # optimizer
         optimizer_encoder = torch.optim.SGD(
             list(self.model.cnn_head.parameters()) + list(self.model.BCBlocks.parameters()), 
-            lr=0, weight_decay=1e-3, momentum=0.9
+            lr=init_lr, weight_decay=1e-3, momentum=momentum_min
         )
-        optimizer_cls1 = torch.optim.SGD(self.model.classifier1.parameters(), lr=0, weight_decay=1e-3, momentum=0.9)
-        optimizer_cls2 = torch.optim.SGD(self.model.classifier2.parameters(), lr=0, weight_decay=1e-3, momentum=0.9)
-        optimizer_cls3 = torch.optim.SGD(self.model.classifier3.parameters(), lr=0, weight_decay=1e-3, momentum=0.9)
-        
-        n_step_warmup = len(self.train_loader) * warmup_epoch
-        total_iter = len(self.train_loader) * total_epoch
-        iterations = 0
+        optimizer_cls1 = torch.optim.SGD(self.model.classifier1.parameters(), lr=init_lr, weight_decay=1e-3, momentum=momentum_min)
+        optimizer_cls2 = torch.optim.SGD(self.model.classifier2.parameters(), lr=init_lr, weight_decay=1e-3, momentum=momentum_min)
+        optimizer_cls3 = torch.optim.SGD(self.model.classifier3.parameters(), lr=init_lr, weight_decay=1e-3, momentum=momentum_min)
 
         # Best model tracking
         best_valid_acc = 0
@@ -91,25 +94,26 @@ class Trainer:
         for epoch in range(total_epoch):
             self.model.train()
             for sample in tqdm(self.train_loader, desc="epoch %d, iters" % (epoch + 1)):
-                # lr cos schedule
                 iterations += 1
-                if iterations < n_step_warmup:
-                    lr = init_lr * iterations / n_step_warmup
+                
+                # One-cycle learning rate scheduling
+                if iterations <= peak_iter:
+                    lr = init_lr + (peak_lr - init_lr) * iterations / peak_iter
                 else:
-                    lr = lr_lower_limit + 0.5 * (init_lr - lr_lower_limit) * (
-                        1
-                        + np.cos(
-                            np.pi * (iterations - n_step_warmup) / (total_iter - n_step_warmup)
-                        )
+                    lr = final_lr + 0.5 * (peak_lr - final_lr) * (
+                        1 + np.cos(np.pi * (iterations - peak_iter) / (total_iter - peak_iter))
                     )
-                for param_group in optimizer_encoder.param_groups:
-                    param_group["lr"] = lr
-                for param_group in optimizer_cls1.param_groups:
-                    param_group["lr"] = lr
-                for param_group in optimizer_cls2.param_groups:
-                    param_group["lr"] = lr
-                for param_group in optimizer_cls3.param_groups:
-                    param_group["lr"] = lr
+
+                # Momentum scheduling
+                momentum = momentum_min + (momentum_max - momentum_min) * (
+                    1 - iterations / total_iter
+                )
+
+                # Apply learning rate and momentum updates
+                for optimizer in [optimizer_encoder, optimizer_cls1, optimizer_cls2, optimizer_cls3]:
+                    for param_group in optimizer.param_groups:
+                        param_group["lr"] = lr
+                        param_group["momentum"] = momentum
 
                 # Extract inputs and labels
                 inputs, labels = sample
@@ -119,13 +123,15 @@ class Trainer:
                 # print(f'labels: {labels.shape}, {labels}')
 
                 # Define labels1, labels2, labels3
-                labels1 = (labels != 0).long()  # 0 -> non-speech, 1~11 -> speech
+                labels1 = (labels != 0).long().float()  # 0 -> non-speech, 1~11 -> speech
                 # print(f'labels1: {labels1.shape}, {labels1}')
-                labels2 = labels[labels > 0]
-                labels2 = (labels2 >= 2).long()   # 1 -> non-keyword, 2~11 -> keyword
+                alpha1 = labels1.sum().item() / len(labels1)  # positive ratio in labels1
+                # print(f'alpha1: {alpha1}')
+                labels2 = (labels[labels > 0] >= 2).long().float()   # 1 -> non-keyword, 2~11 -> keyword
                 # print(f'labels2: {labels2.shape}, {labels2}')
-                labels3 = labels[labels > 1]
-                labels3 = torch.where(labels3 >= 2, labels3 - 2, torch.tensor(-1, device=self.device))  # labels3 keeps only 2~11 (mapped to 0~9), others are set to -1 (invalid labels)
+                alpha2 = labels2.sum().item() / len(labels2)  # positive ratio in labels2
+                # print(f'alpha2: {alpha2}')
+                labels3 = torch.where(labels[labels > 1] >= 2, labels[labels > 1] - 2, torch.tensor(-1, device=self.device))  # labels3 keeps only 2~11 (mapped to 0~9), others are set to -1 (invalid labels)
                 # print(f'labels3: {labels3.shape}, {labels3}')
 
                 # Preprocess inputs
@@ -140,36 +146,37 @@ class Trainer:
                 outputs1 = self.model.speech_branch(embeddings)  # Speech/Non-speech
                 # print(f'outputs1: {outputs1.shape}')
 
-                # Only pass embeddings with labels 1–11 to keyword_branch
-                keyword_embeddings = embeddings[labels > 0]
+                # Only pass embeddings with labels 1~11 to keyword_branch
+                keyword_embeddings = embeddings[labels >= 1]
                 outputs2 = self.model.keyword_branch(keyword_embeddings)  # Keyword/Non-keyword
                 # print(f'outputs2: {outputs2.shape}')
 
-                # Only pass embeddings with labels 2–11 to keyword_classification
+                # Only pass embeddings with labels 2~11 to keyword_classification
                 keyword_class_embeddings = embeddings[labels >= 2]
                 outputs3 = self.model.keyword_classification(keyword_class_embeddings)  # Keyword classification (10 classes)
                 # print(f'outputs3: {outputs3.shape}')
 
                 # Compute Losses
-                loss_speech = weighted_focal_loss(outputs1, labels1)
-                loss_keyword = weighted_focal_loss(outputs2, labels2)  # Only compute for 1~11
-                loss_softmax = softmax_loss(outputs3, labels3)  # Only compute for 2~11
+                loss_speech = sigmoid_focal_loss(inputs=outputs1, targets=labels1.unsqueeze(1), alpha=alpha1, reduction='mean')
+                loss_keyword = sigmoid_focal_loss(inputs=outputs2, targets=labels2.unsqueeze(1), alpha=alpha2, reduction='mean')  # Only compute for 1~11
+                loss_softmax = F.cross_entropy(outputs3, labels3, ignore_index=-1)  # Only compute for 2~11
                 loss = loss_softmax + self.lambda1 * loss_keyword + self.lambda2 * loss_speech
                 wandb.log({"Total Loss": loss.item(), "Softmax Loss": loss_softmax.item(), "Keyword Loss": loss_keyword.item(), "Speech Loss": loss_speech.item()})
 
+                # Backpropagation and weight update
+                optimizer_encoder.zero_grad()
+                optimizer_cls1.zero_grad()
+                optimizer_cls2.zero_grad()
+                optimizer_cls3.zero_grad()
                 loss.backward()
-
-                # Update the encoder and classifiers
                 optimizer_encoder.step()
                 optimizer_cls1.step()
                 optimizer_cls2.step()
                 optimizer_cls3.step()
 
-                self.model.zero_grad()
-
             # valid
             print("cur lr check ... %.4f" % lr)
-            wandb.log({"LR": lr})
+            wandb.log({"LR": lr, "Momentum": momentum})
             with torch.no_grad():
                 self.model.eval()
                 valid_acc, valid_auroc, valid_f1, valid_fa = self.Test(self.valid_dataset, self.valid_loader, augment=True)
