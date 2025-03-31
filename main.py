@@ -16,6 +16,7 @@ from sklearn.metrics import roc_auc_score, f1_score, confusion_matrix
 import wandb
 from thop import profile
 import json
+from torchvision.ops import sigmoid_focal_loss
 
 from bcresnet import BCResNets
 from utils import DownloadDataset, Padding, Preprocess, SpeechCommand, SplitDataset
