@@ -246,6 +246,10 @@ class Trainer:
             true_count += torch.sum(prediction == labels).detach().cpu().numpy()
         acc = true_count / num_testdata * 100.0  # percentage
 
+        print(f'all_labels: {all_labels}')
+        # print(f'all_outputs: {all_outputs}')
+        print(f'all_predictions: {all_predictions}')
+
         # AUROC calculation
         if len(set(all_labels)) < self.num_classes:
             auroc = float('nan')
