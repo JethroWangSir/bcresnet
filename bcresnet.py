@@ -256,33 +256,3 @@ class BCResNets(nn.Module):
             P = torch.cat([P_non_speech, P_non_keyword, P_keyword_id], dim=1)  # [batch, 12]: 0.0, 0.0, 0.1, ..., 0.8
             # print("Total Probability 3:", P.sum().item())
             return P
-
-    def forward(self, x):
-        x = self.encode(x)
-
-        # Step 1: Speech vs. Non-speech classification
-        x1 = self.classifier1(x)
-        x1 = x1.view(-1, x1.shape[1])  # [batch, 1] -> P(speech)
-        P_speech = x1.sigmoid()
-        P_non_speech = 1.0 - P_speech
-
-        # Step 2: Keyword vs. Non-keyword classification (within speech)
-        x2 = self.classifier2(x)
-        x2 = x2.view(-1, x2.shape[1])  # [batch, 1] -> P(keyword | speech)
-        P_keyword_given_speech = x2.sigmoid()
-        P_non_keyword_given_speech = 1.0 - P_keyword_given_speech
-
-        # Step 3: Keyword classification (only if keyword is detected)
-        x3 = self.classifier3(x)
-        x3 = x3.view(-1, x3.shape[1])  # [batch, 10] -> P(keyword_id | keyword)
-        P_keyword_id_given_keyword = x3.softmax(dim=1)
-
-        # Compute final probabilities
-        P_keyword = P_speech * P_keyword_given_speech  # P(keyword) = P(speech) * P(keyword | speech)
-        P_non_keyword_speech_final = P_speech * P_non_keyword_given_speech  # P(non-keyword speech) = P(speech) * (1 - P(keyword | speech))
-        P_keyword_final = P_keyword * P_keyword_id_given_keyword  # P(keyword_id) = P(keyword) * P(keyword_id | keyword)
-
-        # Concatenate to form the final probability distribution [batch, 12]
-        P_total = torch.cat([P_non_speech, P_non_keyword_speech_final, P_keyword_final], dim=1)  # [batch, 12]
-
-        return P_total

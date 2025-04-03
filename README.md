@@ -47,6 +47,11 @@ The downloaded dataset will be saved to the data/ directory by default.
 python main.py --eval --ckpt path/to/your/model --tau 1 --gpu 0 --ver 1
 ```
 
+4. To plot your model using UMAP with GPU 0 and GSC dataset v1, run the following command:
+```
+python main.py --plot --ckpt path/to/your/model --tau 1 --gpu 0 --ver 1
+```
+
 ## Reference
 If you find our work useful for your research, please cite the following:
 ```

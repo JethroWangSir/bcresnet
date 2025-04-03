@@ -17,6 +17,11 @@ import wandb
 from thop import profile
 import json
 from torchvision.ops import sigmoid_focal_loss
+import umap
+import matplotlib.pyplot as plt
+from matplotlib.font_manager import FontProperties
+font_path = '/share/nas169/jethrowang/fonts/Times_New_Roman.ttf'
+font_prop = FontProperties(fname=font_path, size=17)
 
 from bcresnet import BCResNets
 from utils import DownloadDataset, Padding, Preprocess, SpeechCommand, SplitDataset
@@ -39,6 +44,7 @@ class Trainer:
         parser.add_argument("--gpu", default=0, help="gpu device id", type=int)
         parser.add_argument("--download", help="download data", action="store_true")
         parser.add_argument("--eval", help="Only run evaluation", action="store_true")
+        parser.add_argument("--plot", help="Only run umap plot", action="store_true")
         parser.add_argument("--ckpt", help="Path to checkpoint file for evaluation", type=str, default="")
         args = parser.parse_args()
         self.__dict__.update(vars(args))
@@ -339,6 +345,7 @@ class Trainer:
         self.valid_loader = DataLoader(self.valid_dataset, batch_size=1, num_workers=0)
         self.test_dataset = SpeechCommand(test_dir, self.ver, transform=transform)
         self.test_loader = DataLoader(self.test_dataset, batch_size=1, num_workers=0)
+        self.plot_loader = DataLoader(self.test_dataset, batch_size=100, num_workers=0)
 
         print(
             "check num of data train/valid/test %d/%d/%d"
@@ -518,11 +525,86 @@ class Trainer:
         results_path = os.path.join(os.path.dirname(self.ckpt), 'results.json')
         with open(results_path, 'w') as f:
             json.dump(results, f, indent=4)
+    
+    def _umap(self, embeddings, labels, title, num_classes=None, class_names=None):
+        """Generates a 2D UMAP plot for the given embeddings and labels."""
+
+        reducer = umap.UMAP(n_neighbors=5, min_dist=0.1, n_components=2, random_state=42)
+        embeddings_2d = reducer.fit_transform(embeddings)
+
+        plt.figure(figsize=(8, 6))
+        if num_classes is None:
+            # Binary classification (Speech vs. Non-Speech, Keyword vs. Non-Keyword)            
+            # Add legend based on the title (classifier1 or classifier2)
+            if title == "classifier1":
+                legend_labels = ["Non-Speech", "Speech"]
+                cmap = 'cividis'
+            elif title == "classifier2":
+                legend_labels = ["Non-Keyword", "Keyword"]
+                cmap = 'RdYlGn'
+            else:
+                legend_labels = ["0", "1"]  # Default case
+                cmap = 'coolwarm'
+            scatter = plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], c=labels, cmap=cmap)
+            plt.legend(handles=scatter.legend_elements()[0], labels=legend_labels, prop=font_prop)
+        else:
+            # Multi-class classification (10-class Keyword Classification)
+            scatter = plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], c=labels, cmap='tab10')
+            if class_names:
+                plt.legend(handles=scatter.legend_elements()[0], labels=class_names, prop=font_prop)
+
+        plt.xticks([])
+        plt.yticks([])
+        plt.savefig(f'{self.checkpoint_dir}/{title}.pdf', dpi=800)
+        plt.show()
+    
+    def Plot(self):
+        """Loads the model, extracts embeddings, and generates UMAP visualizations."""
+
+        all_labels = []
+        all_embeddings = []
+
+        print(f'Loading model: {self.ckpt}')
+        eval_ckpt = torch.load(self.ckpt)
+        self.model.load_state_dict(eval_ckpt['model_state_dict'])
+        self.model.eval()
+
+        with torch.no_grad():
+            for inputs, labels in self.plot_loader:
+                inputs = inputs.to(self.device)
+                inputs = self.preprocess_test(inputs, labels=labels, is_train=False, augment=False)
+                embeddings = self.model.encode(inputs)
+                all_labels.append(labels.numpy())
+                all_embeddings.append(embeddings.cpu().numpy())
+        
+        all_labels = np.concatenate(all_labels, axis=0)
+        all_embeddings = np.concatenate(all_embeddings, axis=0)
+        all_embeddings = all_embeddings.reshape(all_embeddings.shape[0], -1)
+
+        # Speech vs. Non-Speech
+        speech_labels = (all_labels != 0).astype(int)  # 0 -> non-speech, 1 -> speech
+        self._umap(all_embeddings, speech_labels, "classifier1")
+
+        # Keyword vs. Non-Keyword (only process speech samples)
+        if (all_labels >= 1).sum() > 0:
+            speech_embeddings = all_embeddings[all_labels >= 1]
+            keyword_labels = (all_labels[all_labels >= 1] >= 2).astype(int)  # 1 -> non-keyword, 2~11 -> keyword
+            self._umap(speech_embeddings, keyword_labels, "classifier2")
+
+        # 10-class Keyword Classification (only process keyword samples)
+        if (all_labels >= 2).sum() > 0:
+            keyword_embeddings = all_embeddings[all_labels >= 2]
+            keyword_class_labels = all_labels[all_labels >= 2] - 2  # Normalize to 0-9
+            # class_names = [f"KW {i+1}" for i in range(10)]  # Label keywords as KW_1, KW_2, etc.
+            class_names = ['Down', 'Go', 'Left', 'No', 'Off', 'On', 'Right', 'Stop', 'Up', 'Yes']
+            self._umap(keyword_embeddings, keyword_class_labels, "classifier3", num_classes=10, class_names=class_names)
 
 
 if __name__ == "__main__":
     _trainer = Trainer()
     if _trainer.eval:
         _trainer.Evaluation()
+    elif _trainer.plot:
+        _trainer.Plot()
     else:
         _trainer()
