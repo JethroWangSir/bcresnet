@@ -72,13 +72,12 @@ class Trainer:
         lr_lower_limit = 0
 
         # optimizer
-        optimizer_encoder = torch.optim.SGD(
-            list(self.model.cnn_head.parameters()) + list(self.model.BCBlocks.parameters()), 
-            lr=0, weight_decay=1e-3, momentum=0.9
-        )
-        optimizer_cls1 = torch.optim.SGD(self.model.classifier1.parameters(), lr=0, weight_decay=1e-3, momentum=0.9)
-        optimizer_cls2 = torch.optim.SGD(self.model.classifier2.parameters(), lr=0, weight_decay=1e-3, momentum=0.9)
-        optimizer_cls3 = torch.optim.SGD(self.model.classifier3.parameters(), lr=0, weight_decay=1e-3, momentum=0.9)
+        optimizer = torch.optim.SGD([
+            {'params': list(self.model.cnn_head.parameters()) + list(self.model.BCBlocks.parameters()), 'weight_decay': 1e-3, 'momentum': 0.9},
+            {'params': self.model.classifier1.parameters(), 'weight_decay': 1e-3, 'momentum': 0.9},
+            {'params': self.model.classifier2.parameters(), 'weight_decay': 1e-3, 'momentum': 0.9},
+            {'params': self.model.classifier3.parameters(), 'weight_decay': 1e-3, 'momentum': 0.9}
+        ], lr=0)
         
         n_step_warmup = len(self.train_loader) * warmup_epoch
         total_iter = len(self.train_loader) * total_epoch
@@ -102,13 +101,7 @@ class Trainer:
                             np.pi * (iterations - n_step_warmup) / (total_iter - n_step_warmup)
                         )
                     )
-                for param_group in optimizer_encoder.param_groups:
-                    param_group["lr"] = lr
-                for param_group in optimizer_cls1.param_groups:
-                    param_group["lr"] = lr
-                for param_group in optimizer_cls2.param_groups:
-                    param_group["lr"] = lr
-                for param_group in optimizer_cls3.param_groups:
+                for param_group in optimizer.param_groups:
                     param_group["lr"] = lr
 
                 # Extract inputs and labels
@@ -118,17 +111,27 @@ class Trainer:
                 labels = labels.to(self.device)
                 # print(f'labels: {labels.shape}, {labels}')
 
-                # Define labels1, labels2, labels3
-                labels1 = (labels != 0).long().float()  # 0 -> non-speech, 1~11 -> speech
-                # print(f'labels1: {labels1.shape}, {labels1}')
-                alpha1 = labels1.sum().item() / len(labels1)  # positive ratio in labels1
-                # print(f'alpha1: {alpha1}')
-                labels2 = (labels[labels > 0] >= 2).long().float()   # 1 -> non-keyword, 2~11 -> keyword
-                # print(f'labels2: {labels2.shape}, {labels2}')
-                alpha2 = labels2.sum().item() / len(labels2)  # positive ratio in labels2
-                # print(f'alpha2: {alpha2}')
-                labels3 = torch.where(labels[labels > 1] >= 2, labels[labels > 1] - 2, torch.tensor(-1, device=self.device))  # labels3 keeps only 2~11 (mapped to 0~9), others are set to -1 (invalid labels)
-                # print(f'labels3: {labels3.shape}, {labels3}')
+                # Define multi-level labels
+                speech_labels = (labels != 0).long().float()  # 0 -> non-speech, 1~11 -> speech
+                # print(f'speech_labels: {speech_labels.shape}, {speech_labels}')
+                speech_alpha = 1 - (speech_labels.sum().item() / len(speech_labels))  # positive ratio in speech_labels
+                # speech_alpha = max(0.1, min(speech_alpha, 0.9))
+                # print(f'speech_alpha: {speech_alpha}')
+
+                # Only process keyword labels when speech samples exist
+                if (labels >= 1).sum() > 0:
+                    keyword_labels = (labels[labels >= 1] >= 2).long().float()  # 1 -> non-keyword, 2~11 -> keyword
+                    keyword_alpha = 1 - (keyword_labels.sum().item() / len(keyword_labels))  # positive ratio in keyword_labels
+                    # keyword_alpha = max(0.1, min(keyword_alpha, 0.9))
+                else:
+                    keyword_alpha = 0
+                # print(f'keyword_labels: {keyword_labels.shape}, {keyword_labels}')
+                # print(f'keyword_alpha: {keyword_alpha}')
+
+                # Only process keyword class labels when keyword samples exist
+                if (labels >= 2).sum() > 0:
+                    keyword_class_labels = labels[labels >= 2] - 2
+                # print(f'keyword_class_labels: {keyword_class_labels.shape}, {keyword_class_labels}')
 
                 # Preprocess inputs
                 inputs = self.preprocess_train(inputs, labels, augment=True)
@@ -136,43 +139,63 @@ class Trainer:
 
                 # Get embeddings
                 embeddings = self.model.encode(inputs)
-                # print(f'embeddings: {embeddings.shape}')
+                # print(f'all_embeddings: {embeddings.shape}')
                 
-                # Classify for speech/non-speech
-                outputs1 = self.model.speech_branch(embeddings)  # Speech/Non-speech
-                # print(f'outputs1: {outputs1.shape}')
+                # Speech/non-speech classification
+                speech_outputs = self.model.speech_branch(embeddings)
+                # speech_outputs_prob = speech_outputs.softmax(dim=1)
+                # print(f'speech_outputs_prob: {speech_outputs_prob.shape}, {speech_outputs_prob}')
 
-                # Only pass embeddings with labels 1~11 to keyword_branch
-                keyword_embeddings = embeddings[labels >= 1]
-                outputs2 = self.model.keyword_branch(keyword_embeddings)  # Keyword/Non-keyword
-                # print(f'outputs2: {outputs2.shape}')
+                # Calculate speech loss
+                speech_loss = sigmoid_focal_loss(
+                    inputs=speech_outputs, 
+                    targets=speech_labels.unsqueeze(1), 
+                    alpha=speech_alpha, 
+                    reduction='mean'
+                )
 
-                # Only pass embeddings with labels 2~11 to keyword_classification
-                keyword_class_embeddings = embeddings[labels >= 2]
-                outputs3 = self.model.keyword_classification(keyword_class_embeddings)  # Keyword classification (10 classes)
-                # print(f'outputs3: {outputs3.shape}')
+                # Initialize keyword loss and keyword class loss
+                keyword_loss = torch.tensor(0.0, device=self.device)
+                softmax_loss = torch.tensor(0.0, device=self.device)
 
-                # Compute Losses
-                loss_speech = sigmoid_focal_loss(inputs=outputs1, targets=labels1.unsqueeze(1), alpha=alpha1, reduction='mean')
-                loss_keyword = sigmoid_focal_loss(inputs=outputs2, targets=labels2.unsqueeze(1), alpha=alpha2, reduction='mean')  # Only compute for 1~11
-                loss_softmax = F.cross_entropy(outputs3, labels3, ignore_index=-1)  # Only compute for 2~11
-                loss = loss_softmax + self.lambda1 * loss_keyword + self.lambda2 * loss_speech
-                wandb.log({"Total Loss": loss.item(), "Softmax Loss": loss_softmax.item(), "Keyword Loss": loss_keyword.item(), "Speech Loss": loss_speech.item()})
+                # Only process keyword/non-keyword classification when speech samples exist
+                if (labels >= 1).sum() > 0:
+                    speech_embeddings = embeddings[labels >= 1]
+                    # print(f'speech_embeddings: {speech_embeddings.shape}')
+                    keyword_outputs = self.model.keyword_branch(speech_embeddings)
+                    # print(f'keyword_outputs: {keyword_outputs.shape}, {keyword_outputs}')
+                    
+                    keyword_loss = sigmoid_focal_loss(
+                        inputs=keyword_outputs, 
+                        targets=keyword_labels.unsqueeze(1), 
+                        alpha=keyword_alpha, 
+                        reduction='mean'
+                    )
+
+                    # Only process keyword class classification when keyword samples exist
+                    if (labels >= 2).sum() > 0:
+                        keyword_embeddings = embeddings[labels >= 2]
+                        # print(f'keyword_embeddings: {keyword_embeddings.shape}')
+                        keyword_class_outputs = self.model.keyword_classification(keyword_embeddings)
+                        # print(f'keyword_class_outputs: {keyword_class_outputs.shape}, {keyword_class_outputs}')
+                        
+                        softmax_loss = F.cross_entropy(
+                            keyword_class_outputs, 
+                            keyword_class_labels
+                        )
+
+                # Calculate total loss
+                loss = softmax_loss + self.lambda1 * keyword_loss + self.lambda2 * speech_loss
+                wandb.log({"Total Loss": loss.item(), "Softmax Loss": softmax_loss.item(), "Keyword Loss": keyword_loss.item(), "Speech Loss": speech_loss.item(), "LR": lr})
 
                 # Backpropagation and weight update
-                optimizer_encoder.zero_grad()
-                optimizer_cls1.zero_grad()
-                optimizer_cls2.zero_grad()
-                optimizer_cls3.zero_grad()
+                optimizer.zero_grad()
                 loss.backward()
-                optimizer_encoder.step()
-                optimizer_cls1.step()
-                optimizer_cls2.step()
-                optimizer_cls3.step()
+                optimizer.step()
 
             # valid
             print("cur lr check ... %.4f" % lr)
-            wandb.log({"LR": lr})
+            # wandb.log({"LR": lr})
             with torch.no_grad():
                 self.model.eval()
                 valid_acc, valid_auroc, valid_f1, valid_fa = self.Test(self.valid_dataset, self.valid_loader, augment=True)
@@ -229,26 +252,29 @@ class Trainer:
         for inputs, labels in loader:
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
+            # print(f'labels: {labels}')
             inputs = self.preprocess_test(inputs, labels=labels, is_train=False, augment=augment)
-            outputs = self.model(inputs)  # already probabilities
+            outputs = self.model.inference(inputs)  # already probabilities
+            # print(f'outputs: {outputs}')
 
             # Collect all predictions and labels
-            prediction = torch.argmax(outputs, dim=-1)
+            predictions = torch.argmax(outputs, dim=-1)
+            # print(f'predictions: {predictions}')
             all_labels.extend(labels.cpu().numpy())
             all_outputs.extend(outputs.cpu().detach().numpy())  # probabilities
-            all_predictions.extend(prediction.cpu().numpy())
+            all_predictions.extend(predictions.cpu().numpy())
 
             # Update confusion matrix
-            batch_confusion = confusion_matrix(labels.cpu().numpy(), prediction.cpu().numpy(), labels=np.arange(self.num_classes))
+            batch_confusion = confusion_matrix(labels.cpu().numpy(), predictions.cpu().numpy(), labels=np.arange(self.num_classes))
             confusion_mat += batch_confusion            
 
             # Accuracy calculation
-            true_count += torch.sum(prediction == labels).detach().cpu().numpy()
+            true_count += torch.sum(predictions == labels).detach().cpu().numpy()
         acc = true_count / num_testdata * 100.0  # percentage
 
-        print(f'all_labels: {all_labels}')
+        # print(f'all_labels: {all_labels}')
         # print(f'all_outputs: {all_outputs}')
-        print(f'all_predictions: {all_predictions}')
+        # print(f'all_predictions: {all_predictions}')
 
         # AUROC calculation
         if len(set(all_labels)) < self.num_classes:
@@ -310,9 +336,9 @@ class Trainer:
             self.train_dataset, batch_size=100, shuffle=True, num_workers=0, drop_last=False
         )
         self.valid_dataset = SpeechCommand(valid_dir, self.ver, transform=transform)
-        self.valid_loader = DataLoader(self.valid_dataset, batch_size=100, num_workers=0)
+        self.valid_loader = DataLoader(self.valid_dataset, batch_size=1, num_workers=0)
         self.test_dataset = SpeechCommand(test_dir, self.ver, transform=transform)
-        self.test_loader = DataLoader(self.test_dataset, batch_size=100, num_workers=0)
+        self.test_loader = DataLoader(self.test_dataset, batch_size=1, num_workers=0)
 
         print(
             "check num of data train/valid/test %d/%d/%d"

@@ -1,0 +1,11 @@
+{
+    "accuracy": 96.31901840490798,
+    "auroc": 97.29709445856687,
+    "f1-score": 96.40926197626314,
+    "false_alarm": 2.2058823529411766,
+    "params": {
+        "total_params_k": 69.072,
+        "trainable_params_k": 69.072
+    },
+    "macs_m": 16.833852
+}
