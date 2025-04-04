@@ -529,7 +529,7 @@ class Trainer:
     def _umap(self, embeddings, labels, title, num_classes=None, class_names=None):
         """Generates a 2D UMAP plot for the given embeddings and labels."""
 
-        reducer = umap.UMAP(n_neighbors=5, min_dist=0.1, n_components=2, random_state=42)
+        reducer = umap.UMAP(n_neighbors=5, min_dist=0.5, n_components=2, random_state=42)
         embeddings_2d = reducer.fit_transform(embeddings)
 
         plt.figure(figsize=(8, 6))
@@ -537,10 +537,10 @@ class Trainer:
             # Binary classification (Speech vs. Non-Speech, Keyword vs. Non-Keyword)            
             # Add legend based on the title (classifier1 or classifier2)
             if title == "classifier1":
-                legend_labels = ["Non-Speech", "Speech"]
+                legend_labels = ["Non-speech", "Speech"]
                 cmap = 'cividis'
             elif title == "classifier2":
-                legend_labels = ["Non-Keyword", "Keyword"]
+                legend_labels = ["Non-keyword", "Keyword"]
                 cmap = 'RdYlGn'
             else:
                 legend_labels = ["0", "1"]  # Default case
@@ -556,6 +556,7 @@ class Trainer:
         plt.xticks([])
         plt.yticks([])
         plt.savefig(f'{self.checkpoint_dir}/{title}.pdf', dpi=800)
+        print(f'{self.checkpoint_dir}/{title}.pdf is done!')
         plt.show()
     
     def Plot(self):
