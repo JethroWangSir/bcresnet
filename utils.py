@@ -138,7 +138,7 @@ class Preprocess:
             )
             print("time specaug %d %d" % (self.time_mask_num, self.time_masking_para))
 
-    def __call__(self, x, labels, augment=True, noise_prob=0.8, is_train=True):
+    def __call__(self, x, labels=None, augment=True, noise_prob=0.8, is_train=True):
         assert len(x.shape) == 3
         if augment:
             for idx in range(x.shape[0]):

@@ -20,8 +20,7 @@ from torchvision.ops import sigmoid_focal_loss
 import umap
 import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
-font_path = '/share/nas169/jethrowang/fonts/Times_New_Roman.ttf'
-font_prop = FontProperties(fname=font_path, size=17)
+import gradio as gr
 
 from bcresnet import BCResNets
 from utils import DownloadDataset, Padding, Preprocess, SpeechCommand, SplitDataset
@@ -45,12 +44,16 @@ class Trainer:
         parser.add_argument("--download", help="download data", action="store_true")
         parser.add_argument("--eval", help="Only run evaluation", action="store_true")
         parser.add_argument("--plot", help="Only run umap plot", action="store_true")
+        parser.add_argument("--demo", help="Only run demo", action="store_true")
         parser.add_argument("--ckpt", help="Path to checkpoint file for evaluation", type=str, default="")
         args = parser.parse_args()
         self.__dict__.update(vars(args))
         self.device = torch.device("cuda:%d" % self.gpu if torch.cuda.is_available() else "cpu")
         self._load_data()
         self._load_model()
+
+        font_path = '/share/nas169/jethrowang/fonts/Times_New_Roman.ttf'
+        font_prop = FontProperties(fname=font_path, size=17)
 
         # Add a list to track top 3 validation accuracies
         self.top_3_valid_accs = []
@@ -364,12 +367,24 @@ class Trainer:
         )
         self.preprocess_test = Preprocess(noise_dir, self.device)
 
+    def _load_ckpt(self, ckpt_path, model):
+        print(f'Loading model: {ckpt_path}')
+        ckpt = torch.load(ckpt_path)
+        model.load_state_dict(ckpt['model_state_dict'])
+        model.eval()
+
+        return model
+
     def _load_model(self):
         """
         Private method that loads the model into the object.
         """
+
         print("model: BC-ResNet-%.1f+SR on data v0.0%d" % (self.tau, self.ver))
         self.model = BCResNets(int(self.tau * 8)).to(self.device)
+
+        if self.eval or self.plot or self.demo:
+            self.model = self._load_ckpt(self.ckpt, self.model)
 
     def _save_top_3_checkpoints(self, epoch, valid_acc):
         """
@@ -489,10 +504,6 @@ class Trainer:
         self.model = original_model
     
     def Evaluation(self):
-        print(f'Loading model: {self.ckpt}')
-        eval_ckpt = torch.load(self.ckpt)
-        self.model.load_state_dict(eval_ckpt['model_state_dict'])
-
         # Calculate number of parameters
         total_params, trainable_params = self._calculate_params(self.model)
 
@@ -565,11 +576,6 @@ class Trainer:
         all_labels = []
         all_embeddings = []
 
-        print(f'Loading model: {self.ckpt}')
-        eval_ckpt = torch.load(self.ckpt)
-        self.model.load_state_dict(eval_ckpt['model_state_dict'])
-        self.model.eval()
-
         with torch.no_grad():
             for inputs, labels in self.plot_loader:
                 inputs = inputs.to(self.device)
@@ -599,6 +605,59 @@ class Trainer:
             # class_names = [f"KW {i+1}" for i in range(10)]  # Label keywords as KW_1, KW_2, etc.
             class_names = ['Down', 'Go', 'Left', 'No', 'Off', 'On', 'Right', 'Stop', 'Up', 'Yes']
             self._umap(keyword_embeddings, keyword_class_labels, "classifier3", num_classes=10, class_names=class_names)
+    
+    def _predict(self, audio_record, audio_upload, threshold):
+        # Initialization
+        speech_prediction = keyword_prediction = 0.0
+        keyword_class_prediction = None
+        class_names = {0: 'Down', 1: 'Go', 2: 'Left', 3: 'No', 4: 'Off', 5: 'On', 6: 'Right', 7: 'Stop', 8: 'Up', 9: 'Yes'}
+
+        # Process samples
+        audio_input = audio_record if audio_record else audio_upload
+        transform = transforms.Compose([Padding()])
+        sample, _ = torchaudio.load(audio_input)
+        sample = transform(sample)
+        sample = self.preprocess_test(x=sample, is_train=False, augment=False)
+
+        with torch.no_grad():
+            probability = self.model.inference(sample)
+            speech_prediction = probability[0]
+            keyword_prediction = probability[1]
+            keyword_class_prediction = class_names[torch.argmax(probability[2:]).item()]
+        
+        yield speech_prediction * 100, keyword_prediction * 100, keyword_class_prediction
+
+    def Demo(self):
+        with gr.Blocks() as demo:
+            # Title and Description
+            gr.Markdown("<h1 style='text-align: center; color: black;'>Keyword Spotting using BC-ResNet with Successive Refinement</h1>")
+            gr.Markdown("<h3 style='text-align: center; color: black;'>Record or upload audio to predict if the audio contains keywords.</h3>")
+            
+            # Interface Layout
+            with gr.Row():
+                with gr.Column():
+                    # Separate recording and file upload
+                    record_input = gr.Microphone(type="filepath", label="Record Audio")
+                    upload_input = gr.Audio(type="filepath", label="Upload Audio")
+                    threshold_input = gr.Slider(minimum=0, maximum=1, value=0.5, step=0.1, label="Threshold")
+                with gr.Column():
+                    speech_prediction_output = gr.Textbox(label="Speech Prediction (%)")
+                    keyword_prediction_output = gr.Textbox(label="Keyword Prediction (%)")
+                    keyword_class_prediction_output = gr.Textbox(label="Keyword Class Prediction")
+                    
+                
+            # Prediction Trigger
+            predict_btn = gr.Button("Start Prediction")
+            predict_btn.click(
+                _predict, 
+                [record_input, upload_input, threshold_input], 
+                [speech_prediction_output, keyword_prediction_output, keyword_class_prediction_output],
+                api_name="predict"
+            )
+
+        demo.queue()  # Enable queue to support generators
+        demo.launch(share=True)
+
 
 
 if __name__ == "__main__":
@@ -607,5 +666,7 @@ if __name__ == "__main__":
         _trainer.Evaluation()
     elif _trainer.plot:
         _trainer.Plot()
+    elif _trainer.demo:
+        _trainer.Demo()
     else:
         _trainer()
