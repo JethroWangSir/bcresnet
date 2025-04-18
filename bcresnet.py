@@ -223,7 +223,7 @@ class BCResNets(nn.Module):
 
         return x
 
-    def inference(self, x, threshold=0.5):  # batch = 1
+    def inference(self, x, speech_threshold=0.5, keyword_threshold=0.5):  # batch = 1
         with torch.no_grad():
             # Define probabilities
             P_non_speech = P_non_keyword = torch.zeros(1, 1, device=x.device)
@@ -235,7 +235,7 @@ class BCResNets(nn.Module):
             # Step 1: Speech vs. Non-speech classification
             P_speech = torch.sigmoid(self.speech_branch(x))  # [batch, 1] -> P(speech)
             # print(f'P_speech: {P_speech}')
-            if P_speech.squeeze(0) < threshold:  # if non-speech
+            if P_speech.squeeze(0) < speech_threshold:  # if non-speech
                 P_non_speech = torch.ones(1, 1, device=x.device)
                 P = torch.cat([P_non_speech, P_non_keyword, P_keyword_id], dim=1)  # [batch, 12]: 1.0, 0.0, 0.0, ..., 0.0
                 # print("Total probability 1:", P.sum().item())
@@ -244,7 +244,7 @@ class BCResNets(nn.Module):
             # Step 2: Keyword vs. Non-keyword classification (within speech)
             P_keyword = torch.sigmoid(self.keyword_branch(x))  # [batch, 1] -> P(keyword)
             # print(f'P_keyword: {P_keyword}')
-            if P_keyword.squeeze(0) < threshold:  # if non-keyword
+            if P_keyword.squeeze(0) < keyword_threshold:  # if non-keyword
                 P_non_keyword = torch.ones(1, 1, device=x.device)
                 P = torch.cat([P_non_speech, P_non_keyword, P_keyword_id], dim=1)  # [batch, 12]: 0.0, 1.0, 0.0, ..., 0.0
                 # print("Total probability 2:", P.sum().item())
